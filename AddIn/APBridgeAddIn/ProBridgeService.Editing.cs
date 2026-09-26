@@ -49,6 +49,7 @@ namespace APBridgeAddIn
                 {
                     if (!long.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out long oid))
                         return (null, $"'oids' entry '{part}' is not an integer ObjectID");
+                    if (oids.Count >= MaxEditFeatures) return (null, "Explicit OID list exceeds 10,000 rows; batch the operation.");
                     oids.Add(oid);
                 }
             }
@@ -118,7 +119,7 @@ namespace APBridgeAddIn
             if (attrsObj.Count == 0)
                 return new(false, "attributes object is empty — nothing to update", null);
 
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);
@@ -201,7 +202,7 @@ namespace APBridgeAddIn
                 return new(false, "arg 'layer' required (plus 'where' or 'oids')", null);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);
@@ -264,13 +265,13 @@ namespace APBridgeAddIn
             var addedOids = new List<long>();
             string actualName = string.Empty;
 
-            await QueuedTask.Run(async () =>
+            await CheckedRun(async () =>
             {
                 var map = MapView.Active?.Map
                     ?? throw new InvalidOperationException("No active map");
                 var fl = map.GetLayersAsFlattenedList()
                     .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
+                    .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
                     ?? throw new InvalidOperationException($"Layer not found: {layerName}");
                 actualName = fl.Name;
 

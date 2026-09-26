@@ -11,7 +11,8 @@ namespace APBridgeAddIn
     // error).
     public record IpcRequest(
     [property: JsonPropertyName("op")] string Op,
-    [property: JsonPropertyName("args")] Dictionary<string, string>? Args
+    [property: JsonPropertyName("args")] Dictionary<string, string>? Args,
+    [property: JsonPropertyName("projectPath")] string? ProjectPath = null
     );
 
 

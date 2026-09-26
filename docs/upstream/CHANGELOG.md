@@ -1,0 +1,450 @@
+> Historical upstream changelog. Deployment host names and personal endpoints have been replaced with placeholders for redistribution. These are upstream changes, not the configuration of this build.
+
+# Changelog
+
+All notable changes to this project. Format inspired by [Keep a Changelog](https://keepachangelog.com/), grouped into the rounds in which work landed. Dates are when the work was committed to `master`.
+
+This project is a hardened fork/evolution of [nicogis/MCP-Server-ArcGIS-Pro-AddIn](https://github.com/nicogis/MCP-Server-ArcGIS-Pro-AddIn). The "Pre-rounds" section below covers initial scaffolding and the ModelBuilder integration that preceded the systematic hardening rounds.
+
+---
+
+## [CI: Self-Hosted Add-In Builds] — 2026-08-12
+
+Unreleased; ships with the next tag. `release.yml`'s `build-addin` job had been dead weight since it was added — gated on a self-hosted runner that was never registered, it reported `skipped` in under a second on all four historical runs, which is why every release so far needed the `.esriAddinX` built and uploaded by hand and a hand-regenerated `SHA256SUMS.txt`.
+
+### Added
+- **Self-hosted Actions runner `[upstream runner name omitted]`** (labels `self-hosted, Windows, X64, arcgis-pro`, runner 2.336.0 at `[upstream runner directory omitted]`) and the `HAS_ARCGIS_RUNNER=true` repo variable that ungates `build-addin`. CI now produces the `.esriAddinX` itself, and because that artifact finally exists when the release job's "Stage release assets" step runs, the generated `SHA256SUMS.txt` covers **both** artifacts instead of silently hashing only the exe. The release ritual drops from 6 manual steps to 3 — tag, un-draft, verify. Validated before ungating via a temporary `runner-smoke.yml` mirroring the job's exact steps: MSBuild resolved from VS 2022 Community, linked against the real `ArcGIS.Desktop.*` assemblies under `C:\Program Files\ArcGIS\Pro\bin`, valid bundle produced in ~15s.
+
+### Security
+- **Fork-PR approval tightened to `all_external_contributors`** (from GitHub's `first_time_contributors` default), a prerequisite for the above rather than an independent change. This repo is public, and while `release.yml` is unreachable from a fork (tag-push and `workflow_dispatch` are both write-gated), `ci.yml` triggers on `pull_request` — an event for which GitHub runs the workflow file *from the PR's head branch*. An outside PR could therefore have added `runs-on: [self-hosted, windows, arcgis-pro]` to `ci.yml` and executed arbitrary code on the runner host. Every external PR now requires an explicit maintainer approval before any workflow runs. **Approving an outside PR is now a code-execution decision** — see the `releasing-and-deploying` skill before relaxing this or changing workflow triggers.
+
+### Known limitation
+- The runner is registered **interactively, not as a Windows service**, so it stops listening on logoff/reboot. Elevated `svc.cmd install` + `svc.cmd start` makes it durable. Until then, confirm the runner reports `"status":"online"` before tagging — with the gate now `true`, an offline runner makes `build-addin` **queue** rather than skip, stalling the release job instead of quietly shipping a short release.
+
+---
+
+## [Dev-Cycle Tooling] — 2026-07-13
+
+Released as **v0.4.0**, which rolls up every section from *Standalone tables + optional map parameter* (2026-05-12) through this one — 65 commits since `v0.3.0`. The headline work in that range is `.pyt` out-of-process execution, parameter-interface round-trip fidelity, multi-instance bridge routing, and the Handover Hardening defect sweep; see the sections below for detail.
+
+### Added
+- **`build-addin.ps1`** — a third build script sitting between the two existing ones: it rebuilds and deploys **only** the Pro Add-In, never touching `publish/ArcGisMcpServer.exe`. That distinction matters operationally — the MCP exe is file-locked by any attached MCP client, so the previous options for an `AddIn/**`-only change were to close every Claude Code session and run `restart-dev-cycle.ps1`, or to hand-run MSBuild plus the AssemblyCache wipe and bundle copy. The script locates MSBuild via `vswhere` (the Pro SDK targets file uses `CodeTaskFactory`, so `dotnet build` cannot work), wipes `%LOCALAPPDATA%\ESRI\ArcGISPro\AssemblyCache\{c56ccfd4-…}`, and deploys the bundle. Only ArcGIS Pro must be closed, and only for the deploy step. `-BuildOnly` runs the compile alone, so a syntax check works with Pro still open — and doubles as the release-time bundle build. The bundle is verified to exist *and* be newer than the build start, so a failed build can't silently pass on a stale artifact from an earlier run.
+- **`workflow_dispatch` trigger on `ci.yml`** — the build+test workflow could previously only be re-run by pushing a commit or via a PR event; it can now be kicked manually from the Actions tab (`release.yml` already had one).
+
+### Documentation
+- **`CLAUDE.md` synced to post-hardening reality** — the build/deploy section now documents `build-addin.ps1` as the correct script for `AddIn/**`-only changes, and the testing section reflects that CI gates AtbxTests on every push/PR while the Add-In is still built and uploaded manually.
+
+---
+
+## [Handover Hardening] — 2026-07-12
+
+Closes the two remaining confirmed-open ROADMAP items (A11, F6) plus a round of correctness/safety fixes surfaced while auditing the ModelBuilder writer, the HTTP transport, and `run_model`'s concurrency model. Adds a CI workflow so the AtbxTests suite gates every push/PR, not just release cuts.
+
+### Added
+- **`map` parameter on `add_layer_from_file`/`add_layer_from_url`** (closes ROADMAP **F6**) — same optional `map` parameter, wording, and pass-through pattern as the 8 existing read-side tools; the Add-In handlers (`HandleAddLayerFromFile`/`HandleAddLayerFromUrl`) already read `args["map"]` and call `ResolveMap`, so this was a server-side-only change.
+- **`select_bridge` gated on the HTTP transport.** `BridgeDiscovery.HttpMode` (set by `Program.cs` in the `--http` branch) makes `select_bridge` refuse with a structured error unless `MCP_HTTP_ALLOW_SELECT_BRIDGE=true` is set — `RuntimeOverride` is a process-global static, so on shared HTTP one caller's override previously redirected every other caller's next tool call with no guard at all. The stdio path is unaffected (`HttpMode` stays `false`).
+- **`run_model` concurrency gate.** A process-wide `SemaphoreSlim` now serializes root-level `RunModelCore` executions (nested `ExecuteGraphAsync` recursion does not re-acquire it) — previously nothing stopped two concurrent `run_model`/`start_run_model` jobs from driving Pro's single arcpy session at once, each able to call process-wide `ClearWorkspaceCache` mid-run and pull the rug out from under the other. A contended second run now logs "waiting: another model run is in progress" (both the sync response and `get_run_status` messages) instead of silently stalling.
+- **`SanitizeGdbName` collision-suffix dedup now threaded run-wide across nested-model recursion** (closes ROADMAP **A11**) — the per-run `HashSet` that catches two distinct variables sanitizing to the same GDB name (added earlier, `9a0167c`) previously reset on every nested-model recursion level; it's now passed through as an optional parameter so a parent step and a nested model's own step are checked against the *same* collision set for the whole run.
+- **Multi-derived-output positional refinement.** Steps with 2+ derived outputs previously kept the pre-pass's placeholder value for every slot after execution (only a single derived output got refined, from `ReturnValue`). Now, when `IGPResult.Values`' count exactly matches the declared derived-output slot count, values map onto them positionally; on any count mismatch it falls back to the placeholder values plus a loud `Warning` message rather than guessing. Additive — the single-output path is unchanged.
+- **`SystemToolboxCatalog.DisabledReason`** — when the dynamic system-toolbox catalog has disabled itself (root not found, enumeration failure, or the `analysis.Buffer` sanity check failing after a Pro upgrade), a `GpToolCatalog.ResolveSignature` miss during `run_model` now appends a `Warning` message naming the specific reason, instead of silently degrading to insertion-order dense-packing with no explanation.
+- **"MCP Bridge Status" ribbon button** (was "Start MCP Bridge") — now shows pipe name, PID, registry path, and live/dead state, with a manual restart path (`Module1.RestartBridgeService()`) for a wedged/dead listener that previously had no in-Pro recovery short of restarting Pro itself.
+- **CI workflow** (`.github/workflows/ci.yml`) — builds `McpServer/ArcGisMcpServer` and runs the AtbxTests suite on every push to `master` and every PR. The Add-In is intentionally not built here (needs Pro SDK assemblies + MSBuild's `CodeTaskFactory`, unavailable on hosted runners — see `release.yml`'s `build-addin` job, gated on a self-hosted runner for the same reason).
+- **`release.yml` now runs AtbxTests before publishing** the MCP server exe, so a regression fails `build-mcp-server` and blocks the release job (already `needs: [build-mcp-server]`) rather than only surfacing after a release is cut. The draft-release body now includes a copy-pasteable reminder of the three manual steps a release cutter still has to do (build+upload the `.esriAddinX`, regenerate `SHA256SUMS.txt` for both artifacts, explicitly un-draft the release).
+
+### Fixed
+- **`create_model`/`update_model` reject duplicate parameter/output names** instead of silently overwriting. `GenerateModelFiles`' `nameToId` map is a single shared namespace across input parameters and step outputs; a name collision used to let the second write win silently, with every ref to that name resolving to the wrong (last) id and no error at write time. Both write sites now throw `Duplicate name '<name>' in model definition: parameter/output names must be unique across the model`.
+- **`update_model` no longer drops unrecognized `tool.model`/`tool.content` root keys.** `GenerateModelFiles` used to build both files from scratch, keeping only the keys the simplified schema defines — silently dropping anything else Pro had written there, most importantly model-level default environments set via the Model Properties dialog. On update, it now reads the existing root objects first (preserving the read-before-write ordering `WriteAtbxAtomically` requires) and clones them as the merge base, overwriting only the keys it owns (`tool.model`: `version`/`updated`/`variables`/`processes`; `tool.content`: `type`/`displayname`/`description`/`app_ver`/`product`/`updated`/`params` — `params` is removed, not left dangling, when the new definition has zero exposed parameters). `create_model` is unaffected (no existing object to merge onto).
+- **Lock-contention retry (ERROR 000464) no longer keyed on a literal string match.** The `.pyt` child-copy retry used to trigger only on the exact substring `"000464"` in the error text; it now matches `"000464"`, `"schema lock"`, or a `cannot acquire...lock` regex (all case-insensitive), so differently-worded lock errors from the same underlying contention now retry too. The retry itself is still single-shot — only the trigger predicate changed.
+- **Kestrel's `MaxRequestBodySize` is now unlimited on the HTTP transport**, matching the documented nginx `client_max_body_size 0` config — previously Kestrel's ~30MB default cap could silently 413 large payloads (big `execute_python` code blocks, huge GP value tables) that the proxy would have let through, a transport-dependent gap with no test coverage (`Test-BridgeLive.ps1` only drives the named pipe directly).
+- **`tools/Test-McpStdio.ps1` defaulted to a stale build path** (`bin\Release\net8.0\ArcGisMcpServer.dll`) that isn't what real MCP clients load. Default is now the published single-file exe (`McpServer\ArcGisMcpServer\publish\ArcGisMcpServer.exe`), with a fallback to the old DLL path plus a loud `Write-Warning` if the published exe hasn't been built yet.
+
+### Internal
+- Removed the dead write-only `ModelProcess.IsIterator` property (the executor has always rejected iterator/unknown kinds via `Kind` directly, not this flag) and corrected the stale `WalkModel`/`pythonScriptTool` XML doc comments that claimed otherwise or claimed `.pyt` steps are "NOT step-executed" (they've run out-of-proc via `propy.bat` since the 2026-07-10 round).
+- `IpcModels.cs` on both sides of the pipe boundary gained matching drift-warning comments: `IpcRequest`/`IpcResponse` are hand-mirrored with no shared assembly, and a field added to one side without mirroring it in the other silently vanishes at runtime with no compile error.
+- `AtbxTests`' `SystemToolboxCatalog` section now probes availability (`GetSignature("analysis.Buffer") != null`) and prints `SKIP` lines instead of failing when Pro isn't installed, so the suite is genuinely runnable in CI; the hand-pinned `GpToolCatalog.ResolveSignature` check (independent of a Pro install) was pulled out of that conditional block since it always applies. Added permanent coverage for the duplicate-name guard and the update_model metadata-preservation fix.
+- Removed a stale `ArcGisMcpServer.csproj` comment referencing a nonexistent Solution Explorer `ItemGroup`.
+
+### Deployment note
+The Add-In-side fixes above (concurrency gate, lock-contention regex, multi-derived-output refinement, `SystemToolboxCatalog.DisabledReason` surfacing, duplicate-name guard, update_model metadata preservation, the ribbon button) live in `AddIn/APBridgeAddIn/` source only as of this entry — they take effect for a running Pro session only after the `.esriAddinX` bundle is rebuilt and redeployed (see **releasing-and-deploying**). Until that redeploy, a live bridge still exhibits the pre-fix behavior described above.
+
+---
+
+## [.pyt Out-of-Process Execution + Parameter-Interface Fidelity] — 2026-07-10
+
+This round closed two remaining gaps in the ModelBuilder engine surfaced by a paired-agent relay session driving real siting-model drivers against the bridge: script tools hosted in `.pyt` files couldn't run at all (`run_model` refused them outright), and `describe_model`/`update_model` round-trips could silently corrupt a model's public parameter interface.
+
+### Added
+- **Parameter-interface fidelity contract.** `describe_model` now emits `optional: true` per input (read from `tool.content`'s `type:"optional"`, not derived), orders `inputs` by `tool.content`'s key order (the real dialog/arcpy calling order, not `tool.model`'s creation order), marks stray Parameter-flagged `tool.model` variables with no `tool.content` entry `exposed: false` so they aren't promoted into the interface, and emits a top-level `parameterOrder` (full interface order, derived outputs interleaved). `GenerateModelFiles` honors all four; older definitions missing the fields keep prior behavior. Found via a 21-input Pro-authored nested-model driver that came back as 22 inputs with every parameter Required after a round-trip — an ERROR 000735 cascade at run time. ([f73c891](../../commit/f73c891))
+- **`pythonScriptTool` recognized as a 5th process shape** (`.pyt`-hosted script tools, `tool_type:"PythonScriptTool"`) in both `describe_model`/`SimplifyModel` and `WalkModel`, and round-trips verbatim — previously fell through to `unknown`/`unknown` and made affected models unwritable via `update_model`. ([f73c891](../../commit/f73c891))
+- **`.pyt`-hosted script-tool steps now execute out-of-process during `run_model`.** In-proc `ExecuteToolAsync` on a `.pyt` path never returns (the same tool runs fine via `propy.bat`), so the executor spawns a child arcpy process per `.pyt` step: `propy.bat` (launched from Pro, inherits its clean environment) runs a generated script that does `ImportToolbox` + calls the tool with kwargs by slot name, prints one marked JSON result line, and the bridge maps `getOutput(i)` back onto the step's out-direction slots in stored order (first-input fallback mirrors the existing in-place pre-pass). Per-step environments forward through; a per-step timeout (`pytTimeoutSeconds`, default 3600) kills a hung child. Cross-process caveats — no selection propagation, no `in_memory` datasets — are documented, not solved. ([3f73930](../../commit/3f73930))
+- **`pytMode="skip"` partial-run mode** — `.pyt` steps and everything downstream of them skip (cascade tracked via `skippedOutputVarIds`), reported back as `skippedPytSteps`, so the pure-GP/nested remainder of a model still runs even when a `.pyt` step can't. `valid=false` `.pyt` failures mirror the existing GP `valid=false` contract (skip counted, no cascade seeding). `run_model`/`start_run_model` gain optional `pytMode`/`pytTimeoutSeconds` args. ([3f73930](../../commit/3f73930))
+- **Auto-create missing output File GDBs before a step runs.** arcpy auto-creates `env.scratchGDB` the first time a tool writes into it in a normal session; the step-by-step executor didn't, so the first output routed into a not-yet-existing scratch GDB in a fresh toolbox folder failed with ERROR 000210 mid-run. Now best-effort `CreateFileGDB` per missing parent, noted in run messages either way. Field-reported on the BankSiting driver. ([d47c280](../../commit/d47c280))
+
+### Fixed
+- **ERROR 000464 lock contention between Pro's in-proc GP session and `.pyt` children, defeated in two layers.** Pro's main process holds shared locks on every file GDB its in-proc steps write to, which `ClearWorkspaceCache` does not release on its own. Layer 1: call `ClearWorkspaceCache` before every child dispatch plus one lock-aware retry, closing the simple case. ([00b86c2](../../commit/00b86c2)) That proved insufficient for a `.pyt` needing an exclusive schema lock on a GDB the parent had already written to (NetNeed's `env.scratchGDB` fallback), so Layer 2 gives every `.pyt` child in a run a shared, run-private `pyt_scratch_<stamp>.gdb` next to the toolbox and redirects the child's `workspace`/`scratchWorkspace` there (`pytIsolatedScratch=false` opts out for models whose stored literal paths expect outputs inside the parent scratch). ([0436465](../../commit/0436465)) A second contention flavor — tools that modify an input in place (BankScore's `AddField` on a joined FC an in-proc step had just written) — needed a further fallback: on a residual 000464 the retry has the CHILD copy the contended parent-GDB inputs into its own isolated scratch and run against the copies (child-side, so the parent never plants its own locks on the copies); the runner reports `kwargs_used` so output mapping follows the modified copies. ([0ca4d8d](../../commit/0ca4d8d))
+- Doc pass records the full lock-isolation design and the end-to-end validation result: BankSiting driver 10/10 steps (6 `.pyt` wrappers out-of-proc) ran successfully, with `Candidate_Bank_Sites` exact-matching the single-process baseline (1,330 features). ([55d7646](../../commit/55d7646))
+
+### Internal
+- `AtbxTests` grew 34 → 55 checks covering post-update membership/order, optionality, doctored Pro-authored-shape fixtures, stray-variable preservation, `parameterOrder` honoring, and `.pyt` round-trip idempotence. ([f73c891](../../commit/f73c891)) A field report claiming `update_model` writes dangling `$rc:{name}.title` displaynames for newly-exposed output params without a backing `tool.content.rc` key did not reproduce on a bridge-authored fixture; pinned with permanent assertions to catch a regression or Pro-authored-shape trigger. ([0e24723](../../commit/0e24723))
+- CLAUDE.md updated with the parameter-interface fidelity contract, `.pyt` execution design, and lock-isolation layers; the 180s Python warm-up gate note scoped to the in-proc Python lane only (bridge reads and native-GP `run_model` answer at ~60–95s). ([80b4b6b](../../commit/80b4b6b), [d47c280](../../commit/d47c280))
+
+---
+
+## [Executor Fidelity: Real Layer-Backed Siting Models] — 2026-06-12
+
+Five targeted fixes surfaced by driving Lucas's Mitigation Siting Model (a Pro-authored model referencing project map layers) end-to-end through `run_model` from a headless test bench.
+
+### Fixed
+- **`%Var%` substitution now matches display-name labels, not just `param_name`.** ModelBuilder writes the variable's LABEL into literals (`%Output Workspace%`, spaces and all), while the executor matched only the underscored `param_name` (`Output_Workspace`) — the pattern passed through unsubstituted and arcpy received the literal `%` characters (ERROR 000210, hit at model step 4). `ModelVariable` now carries `DisplayName`; substitution matches name, label, and the space/underscore-normalized form of each. ([0d2e5d7](../../commit/0d2e5d7))
+- **`%Var%` refs inside seeded stored values now substitute too, not just literal expressions.** Intermediate output variables store paths like `"%Output Workspace%\Clipped_Parcels"`; the seeding pass copied them into the runtime map verbatim and the output-slot branch consumed them unsubstituted. Two substitution sweeps now run after seeding (covering one level of chained indirection), each followed by relative-path resolution. ([721627f](../../commit/721627f))
+- **Relative catalog paths now resolve against the toolbox's home folder.** "Store relative path names" models stash literals like `".\X.gdb\Reclassify_Out"` or `"..\Other\Y.gdb\FC"`; Pro resolves these against the toolbox's containing folder at run time, but the executor passed them through verbatim and arcpy resolved against an arbitrary CWD (ERROR 000875 on the first such output). Stored variable seeds, literal slot values, per-step env values, and nested-model child params all route through the new `ResolveRelative` helper. ([72c00bf](../../commit/72c00bf))
+- **`valid=false` ("not-ready") steps now get best-effort execution instead of an automatic skip.** Stored models carry `valid="false"` on steps whose inputs were unset at save time — including fully-wired chains that become runnable once `run_model` supplies parameter values (the Mitigation Siting Model has 22 such steps, including its entire final ranking chain) as well as genuinely dangling leftovers. Pro's own canvas Run skips not-ready elements; the executor now mirrors that: a failure on a marked-invalid step logs as a skipped warning and the run continues, while a failure on a genuinely valid step still aborts the run. Result payload gains `skippedNotReadySteps`. ([1e03815](../../commit/1e03815))
+
+### Added
+- **`variableOverrides` on `run_model`/`start_run_model`** — sets any model variable by name or display name, applied after parameter seeding and before the `%Var%` substitution sweeps. Models authored against project map layers store bare layer names in non-parameter variables that only resolve with that project's map open and focused; this lets a caller resolve layer names to concrete dataset paths (e.g., from the `.aprx`'s layer documents) and run the model from any Pro instance, including a headless test bench. ([1dc2b40](../../commit/1dc2b40))
+
+---
+
+## [Multi-Instance Routing + 30 New Capabilities + Test Batteries] — 2026-06-11
+
+A single day's push that took the bridge from ModelBuilder-only automation to a broad general-purpose Pro driver, added the isolation primitives needed for one-agent-per-Pro-instance operation, and stood up two independent test suites.
+
+### Added
+- **`run_model` executes `scriptTool` and `nestedModel` steps.** Real siting models embed script tools (e.g., `UniqueID`, `NBPopulate`) via cross-toolbox relative paths and host nested models; the executor's gpTool-only gate previously refused all of them. Nested models hosted in the same `.atbx` recurse through the same step-by-step engine (preserving the first-run JIT-validation fix), with cycle detection and a depth-8 guard; parent slot values map to child params by name and child output params map back by name. Script tools (and `.tbx`-hosted nested models, which can't be parsed) dispatch by qualified path via `ExecuteToolAsync("<toolbox>\<tool>")`, with the positional signature read from the target's own `tool.content` (derived params excluded from the call array per the arcpy contract). New `AtbxManager.ResolveToolReference` resolves bare-name/relative/absolute path refs against the `.atbx` treated as a directory. Iterator/unknown kinds are still rejected. ([2edae2f](../../commit/2edae2f))
+- **Strict `ARCGIS_PROJECT` pinning + `list_bridges`.** A pinned MCP server now throws a structured `BridgePinException` (listing live instances) instead of silently falling back to the most-recently-started Pro instance — the old fallback meant one agent could accidentally drive another agent's project when two instances were open. Matching is extension/path-tolerant since the Add-In registers `projectName` WITH `.aprx`. New server-local `list_bridges` tool enumerates live instances and shows current routing. Live-verified with two simultaneous Pro instances: independent pipes, concurrent cross-instance ops, pin-beats-recency routing, strict-miss errors. ([55b3298](../../commit/55b3298)) The dual-pinned-servers `.mcp.json` pattern (one agent, two instances) documented in README. ([ad395ff](../../commit/ad395ff))
+- **`select_bridge`** — dynamic per-session routing so one unpinned agent can work across multiple Pro instances without `.mcp.json` config: `list_bridges` to discover, `select_bridge('<project>')` to route subsequent calls there, `select_bridge()` with no args to return to auto-routing. Same strict matching as the env pin; refused outright when `ARCGIS_PROJECT` is set (operator isolation wins). Verified live against four simultaneous Pro instances. ([186fad6](../../commit/186fad6))
+- **30 new capabilities** added across new partial-class files: `execute_python` (arbitrary arcpy in-process via a deployed `bridge.pyt`, stdout captured, tracebacks surfaced for self-correction); vision (`capture_map_view` PNG export, `zoom_to_extent`/`zoom_to_scale`/`zoom_to_selected`, bookmark list/zoom/create); GP discovery (`describe_gp_tool`, `search_gp_tools` over ~1700 system tools); editing completion (`update_features`, `delete_features`, `add_polyline_features`, `save_edits`/`discard_edits`/`has_edits`); map admin (`create_map`, `open_map_view`, `set_basemap`, `set_definition_query`, `set_layer_transparency`, `set_labeling`); layout furniture (`add_legend`, `add_north_arrow`, `add_scale_bar`, `add_layout_text`, `set_map_frame_extent`); symbology (`set_layer_renderer`, `get_layer_symbology`); catalog (`list_gdb_contents`, `describe_dataset`); plus per-call GP environment overrides on `run_gp_tool` and a generic `bridge_op` escape hatch. Pipe server now serves connections concurrently so polling works during long ops. ([9a0167c](../../commit/9a0167c))
+- **`get_field_statistics`** — one-pass field profile (null/distinct counts, top values by frequency, min/max/mean) so agents ground WHERE clauses and renderer choices in real values instead of guesses. **`select_by_location`** — spatial selection via `SelectLayerByLocation` with friendly layer resolution (verified live: 111 wetlands selected from a 38M-feature USGS service intersecting footprints). ([d9c3f5c](../../commit/d9c3f5c))
+- **Dynamic GP tool schema catalog.** New `SystemToolboxCatalog` parses Pro's installed system-toolbox metadata (`{Tool}.tool/tool.content`, JSON declaration order = arcpy positional order), covering ~1700 tools; `GpToolCatalog`'s hand-pinned entries win on conflict, and a Buffer sanity check disables the dynamic catalog on format drift. ([a97668e](../../commit/a97668e))
+
+### Fixed
+- **`execute_python` rewritten onto the `management.CalculateValue` channel.** `ExecuteToolAsync` on an out-of-project `.pyt` path hangs forever in-proc (the identical `.pyt` runs fine via standalone `propy`), making the original deployed-toolbox design unusable. Rewritten to ride system-tool resolution with base64-encoded code in the code block; verified live: `CURRENT` project access, stdout capture, and traceback surfacing all work in roughly 0s. ([240df97](../../commit/240df97))
+- **Python GP warm-up wedge gated.** A Python-touching GP call in the first minutes after Pro launch permanently wedges the GP Python lane (native GP is unaffected). `execute_python` now refuses with a clean "warming up, retry in Ns" error until 180s of Pro uptime have elapsed. ([240df97](../../commit/240df97))
+- **Model-engine correctness batch**: `create_toolbox` refuses to truncate an existing toolbox; multi-input `element_id` arrays (Merge/Union/Append) round-trip with all topo edges instead of collapsing to the first input; preconditions parse into the topo sort and round-trip as `preconditions`; per-step environments parse for the executor and join the dependency graph; iterator/unknown step kinds make `GenerateModelFiles` throw instead of silently writing a bogus header; derived-output `parameter` (the "P" badge) round-trips; `GenerateModelFiles` is now two-pass so steps can reference outputs declared by later steps; params dicts are case-insensitive with JSON number/bool coercion; `WriteAtbxAtomically` is serialized process-wide against the concurrent pipe server. ([a97668e](../../commit/a97668e))
+
+### Internal
+- **`tests/AtbxTests`** — out-of-process round-trip test suite (27 checks) compiling the ModelBuilder file layer by source inclusion, no Pro SDK needed: create-toolbox overwrite guard, multi-ref/precondition/env/output-parameter round-trips, two-pass forward refs, describe-update-describe stability, `WalkModel` topo order, iterator writer guard, surgical writes, and `SystemToolboxCatalog` signatures checked against the live Pro install. ([dfa8fe8](../../commit/dfa8fe8))
+- **`tools/Test-BridgeLive.ps1`** — 41-check live smoke battery over the named pipe covering every new capability family, later extended to 43 checks with field-stats and spatial-selection coverage. ([240df97](../../commit/240df97), [d9c3f5c](../../commit/d9c3f5c))
+- **README** documents the 82-tool surface across 12 domains; project structure section updated for the new partial-class families, catalogs, `tools/`, and `tests/`. ([d9c3f5c](../../commit/d9c3f5c))
+- **Ops lesson recorded**: Pro must not inherit an agent shell's environment (a corrupt PATH broke conda activation); launch via `explorer.exe` instead. ([240df97](../../commit/240df97))
+
+---
+
+## [ModelBuilder Authoring: Output Canonicalization + Surgical Writes] — 2026-06-08 to 2026-06-10
+
+### Fixed
+- **`update_model` (full-replace) silently renamed derived outputs whose signature output slot didn't match the user-supplied key.** Example: `CalculateGeometryAttributes`'s real output slot is `updated_features`, but users commonly send `out_features`; Pro's load-time normalizer then inserted the canonical slot and stamped its default UI label as the variable name, orphaning every downstream `ref` to the user-supplied name and silently breaking the chain. New shared `GpToolCatalog` static (signatures + canonical output slots, moved out of the executor's local table so both halves of the bridge can consult it, expanded with PairwiseClip/PairwiseIntersect/Identity/Statistics/CalculateGeometryAttributes) lets the writer canonicalize non-canonical output keys up front while preserving the user's supplied output name. ([602be4f](../../commit/602be4f))
+- **Declaring a derived output with `type: "GPComposite"` hard-crashed ModelBuilder on open.** `GPComposite` is a multi-type input wrapper with no meaning on a derived output; the writer now coerces a `GPComposite` output declaration to the tool's canonical concrete `DE*` type (`DEFeatureClass`/`DETable`/etc.) when the tool is known. ([602be4f](../../commit/602be4f))
+- **Custom script-tool and nested-model steps collapsed to `tool: "unknown"` in `describe_model`, and `update_model` silently dropped them on every round-trip.** The reader only inspected `system_tool`/`model_tool` and never looked at the `tool_type`+`path` fields Pro uses for script/nested steps. New `ToolKind` enum (`GpTool`/`ScriptTool`/`NestedModel`/`Iterator`/`Unknown`) and a `Kind` field on `ModelProcess`; `WalkModel` reads `tool_type`+`path` alongside the GP-tool fields, `DescribeModel` emits a `kind` string per step, and `GenerateModelFiles` writes the right shape for each kind (defaulting to `gpTool` when absent, so existing payloads are unaffected). Verified against a real Pro-authored model with both a `ScriptTool` and a `ModelTool` step: both round-trip through describe → full-replace update → describe with refs intact. ([7509ff5](../../commit/7509ff5))
+
+### Added
+- **Surgical writes: `set_parameter_default` and `set_step_parameter`.** `set_parameter_default` sets or clears one input parameter's default; `set_step_parameter` retargets one step's input slot (accepts `{ref: Name}`, `{value: literal}`, or a bare string; rejects output declarations). Both touch only the target node in `tool.model` — every other ZIP entry stays byte-identical, with no `GpToolCatalog` canonicalization or re-triggered round-trip behavior. ([fd7b8da](../../commit/fd7b8da))
+- **`WriteAtbxAtomically` — canvas-deadlock-proof `.atbx` writes.** Any in-place write to a model Pro held open in a ModelBuilder canvas (directly, or via a `scriptTool`/`nestedModel` ref from another canvas-open model) previously deadlocked for 4 minutes. The new helper reads the live file into memory, runs the mutation in-memory, writes to a temp file, then `File.Replace`s it over the live file — the bridge never holds the live file lock during the heavy `ZipArchive` update phase. `CreateModel`, `UpdateModel`, `SetParameterDefault`, and `SetStepParameter` all route through it. If the atomic swap still hits a sharing violation, the error names the file and the suspected canvas blocker instead of the silent 4-minute timeout. Operational caveat: Pro's open canvas does not auto-reload after a surgical write; the tab must be reopened to see the change. ([fd7b8da](../../commit/fd7b8da))
+- **`CLAUDE.md` added** — captures the bridge architecture (MCP server + Add-In split, per-PID discovery, `run_model` executor), the `.atbx` authoring surface (`GpToolCatalog`, `WriteAtbxAtomically`), and non-obvious constraints that bite future contributors (canvas-deadlock on in-place writes, `JsonSerializerOptions` for `JsonNode`, `MakeEnvironmentArray` named args, `ZipArchive` Update read-before-write). ([c1e8102](../../commit/c1e8102))
+
+### Internal
+- `HandleCreateModel` appends a `hint` field on success directing the user to refresh the toolbox in Pro's Catalog pane so new models surface. ([602be4f](../../commit/602be4f))
+- Verified at the storage level via round-trip on a scratch toolbox for both the `out_features`/`DEFeatureClass` and `GPComposite` output cases; live `run_model` + ModelBuilder-open eyeball verification followed in the next round. ([602be4f](../../commit/602be4f))
+
+---
+
+## [run_model First-Run Fixes + Async Execution] — 2026-05-22 to 2026-05-23
+
+Five coordinated fixes make `run_model` actually complete a real multi-step ModelBuilder model (the 31-step "Aurora" model) end-to-end on first run, plus an async execution path for models that outrun an MCP client's tool-call ceiling.
+
+### Fixed
+- **First-run failures: env defaults, step-by-step execution, sentinels.** Three coordinated changes matching ribbon Run behavior: (1) `DefaultRunEnvironments` now pins `workspace`+`scratchWorkspace` to the project's default GDB — without this, derived intermediates failed ERROR 000735 because the GP engine couldn't resolve where to place them; the ribbon Run dialog applies these by default, `ExecuteToolAsync` from an Add-In does not. (2) `HandleRunModel` rewritten to walk the model graph step-by-step (new `AtbxManager.WalkModel`, topo-sorted via Kahn's algorithm) instead of calling `ExecuteToolAsync(modelPath)` once — Pro's whole-chain pre-validation rejects intermediate inputs whose producing FC hasn't materialized yet (ERROR 000840); the ribbon avoids this by validating each process JIT after upstream outputs exist. (3) Unresolved input refs use arcpy's `"#"` sentinel; `DescribeModel`/`GenerateModelFiles` round-trip stored output paths through describe → update → describe. ([82a5c65](../../commit/82a5c65))
+- **Name-based slot mapping for system GP tools.** Pro stores model process params sparsely by name, but the step-by-step executor packed them densely-positional into the GP tool's value array — when a model omits an optional slot before an included one (common for `Project`, `SummarizeWithin`, `SelectLayerByLocation`), every subsequent value shifted into the wrong slot (e.g., `preserve_shape`'s `false` landing in `transform_method`, ERROR 000365). New `GpToolSignatures` table maps `"alias.tool"` to declared positional slot names; the executor resolves each position by slot name, inserting `"#"` for omitted slots. Tools without a table entry fall back to dense-packing so the misalignment surfaces with a clear error. Initial coverage: Project, CopyFeatures, PairwiseErase, SummarizeWithin, SelectLayerByLocation, CalculateField, JoinField, AddField, Buffer, Clip, Intersect. ([3fbd6ff](../../commit/3fbd6ff))
+- **Record outputs whose slot is not in the tool signature.** Selection tools (`SelectLayerByLocation`, `SelectLayerByAttribute`) modify their `in_layer` in place and return it; arcpy has no positional output param for this, so the by-name signature walk silently skipped these outputs and downstream refs resolved to empty (ERROR 000735). A pre-pass now records the output variable as the first resolved input value when the output's slot isn't in the tool's signature. `management.SelectLayerByAttribute` added to signatures for the same reason. ([dc630e7](../../commit/dc630e7), [21e5af9](../../commit/21e5af9))
+- **Sanitize ModelBuilder variable names into valid GDB output paths + bump MCP timeout to 600s.** ModelBuilder variable names can contain spaces/punctuation, but a File GDB feature class/table name must start with a letter and use only letters/digits/underscores — auto-named variables ("Impact Stream Summary") tripped ERROR 000354 the moment the executor used them as an output path. New `SanitizeGdbName` fixes this. Separately, `RequestTimeoutMs` raised from 120s to 600s (Aurora's 31-step model with hosted-service clips runs longer than 120s wall-clock; the Add-In was completing real work but the MCP server gave up and hid the actual GP error). ([69bc4c0](../../commit/69bc4c0))
+- **Substitute ModelBuilder `%VarName%` in literal expressions.** ModelBuilder's own engine performs `%VarName%` string substitution on expression-like parameters (`CalculateField.expression`, SQL where-clauses) before handing them to arcpy; the executor previously passed the raw literal through, so arcpy received unsubstituted `%` text and threw a Python `SyntaxError`. New `SubstituteModelVars` helper scans literal-string params for `/%[A-Za-z_]\w*%/` and replaces with the runtime value of the matching model variable (falling back to `StoredValue`, leaving unresolved patterns in place so the resulting GP error names the missing variable). ([a180452](../../commit/a180452))
+- **Hint added to `run_model` errors when no active map view is the likely cause.** ERROR 000732/000840 (layer-name resolution failures) most commonly follow a Pro restart where the map tab isn't focused (`MapView.Active` is null). A remediation hint is appended only when both the error code and the null active view hold, so genuinely bad paths with a map view open aren't masked. ([e521761](../../commit/e521761))
+
+### Added
+- **Async `run_model`: `start_run_model` (`RunModelAsync` bridge op) + `get_run_status`.** Aurora-class models with hosted-service clips can run longer than Claude Desktop's ~4-minute MCP tool-call ceiling even with the bridge's 600s timeout. `HandleRunModel`'s body extracted into `RunModelCore(args, RunJob?)` shared by both sync and async paths; the async handler creates a `RunJob` (id, status, step counts, current step, messages), runs it on a background `Task.Run`, and returns `{jobId, started, pollWith}` immediately; `get_run_status` returns a snapshot under the job's lock, cheap to poll repeatedly; jobs older than 1 hour past completion are auto-pruned. Sync `run_model` is unchanged. The MCP-facing method was renamed `RunModelAsync` → `StartRunModel` (tool name `start_run_model`) after the MCP SDK's PascalCase→snake_case conversion stripped the `Async` suffix from both methods and collapsed them onto the same `run_model` tool name, leaving the async tool invisible to agents; the underlying bridge op `pro.runModelAsync` is unchanged. ([86da3d9](../../commit/86da3d9), [cddc498](../../commit/cddc498))
+
+---
+
+## [Standalone tables + optional map parameter on read-side handlers] — 2026-05-12
+
+Closes two more layer-finding gaps surfaced during agent audit (alongside the nested-layer fix). Both affect the same 8 read-side handlers; both add optional behavior without changing existing call sites' semantics.
+
+### Added
+- **Standalone tables are now first-class addressable members.** Previously every handler searched only `Map.GetLayersAsFlattenedList()`, which excludes non-spatial standalone tables. An agent calling `read_layer_attributes("MyAttributeTable")` or `list_fields("LookupTable")` got `"Layer not found"` even when the table was right there in the TOC. Eight read-side handlers now search BOTH `GetLayersAsFlattenedList()` AND `Map.StandaloneTables`: `list_layers`, `list_fields`, `get_layer_properties`, `read_layer_attributes`, `get_selected_features`, `select_by_attribute`, `count_features`, `clear_selection`.
+- **Optional `map` parameter on each of the 8 handlers** lets the agent target a non-active map by name. Default behavior unchanged: omit `map` to use the active map view's map. Useful when an agent wants to inspect a layer in a different map without switching views first.
+
+### Internal
+- Added three private helpers in `ProBridgeService` to centralize the new logic:
+  - `ResolveMap(string? mapName)` — returns the named map or the active map's map; throws structured error if neither is available.
+  - `FindMapMemberByName(Map, string)` — searches flattened layers + standalone tables, returns the first match. Case-insensitive.
+  - `GetTableFromMember(MapMember)` — returns the underlying `Table` for both `FeatureLayer` (via `GetFeatureClass()`, which inherits from `Table`) and `StandaloneTable` (via `GetTable()`). Returns null for member types without an attribute table (group layers, raster layers, etc.) so callers can throw a member-type-aware error.
+- `list_layers` response now includes standalone table names alongside layer names in a flat array. Group-layer hierarchy was already flattened (from yesterday's fix); now the table dimension is too. Agents can use `get_layer_properties` on a returned name to distinguish a layer from a table.
+- `get_layer_properties` returns reduced metadata for standalone tables: `type=StandaloneTable`, `dataSource`, `rowCount`. No `spatialReference`, `extent`, `geometryType`, or `featureCount` (they don't apply to non-spatial tables). Existing layer paths return the same shape as before.
+- `select_by_attribute`, `get_selected_features`, and `clear_selection` dispatch their `Select()` / `GetSelection()` / `ClearSelection()` calls between `FeatureLayer` and `StandaloneTable` because those methods are declared on subclasses, not on a common interface.
+- `clear_selection` in all-targets mode (no `layer` arg) now also clears every standalone table's selection in addition to feature layers. Same conceptual rationale as the original: leftover selection state silently restricts downstream operations.
+- Handlers NOT changed by this batch (still feature-layer-only, reject standalone tables explicitly): `zoom_to_layer`, `set_layer_visibility`, `move_layer`, `add_point_features`, `add_polygon_features`, `export_layer`, `rename_layer`, `remove_layer`. These are operations that either don't apply to non-spatial tables (zoom, geometry-creation) or have layer-specific semantics (TOC ordering). Future work if those workflows surface real needs.
+
+---
+
+## [Nested-layer support for layer-name handlers] — 2026-05-12
+
+### Fixed
+- **Layer-name-based handlers now find nested layers inside group layers.** Previously `count_features`, `zoom_to_layer`, `select_by_attribute`, `clear_selection`, `list_fields`, `get_layer_properties`, `read_layer_attributes`, `get_selected_features`, `remove_layer`, `rename_layer`, `set_layer_visibility`, `add_point_features`, `add_polygon_features`, and `list_layers` all searched `Map.Layers`, which returns *only* top-level layers — children of group layers were invisible. An agent looking for a layer nested inside a group got `"Layer not found"` even though the layer was right there in the TOC. Fixed by switching every find-by-name site from `Map.Layers` to `Map.GetLayersAsFlattenedList()`, which descends the layer tree depth-first and returns all layers in TOC order.
+- **`list_layers` now includes group layer children.** A map with `Group1` containing `Parcels` and `Roads` previously returned `["Group1"]`; now it returns `["Group1", "Parcels", "Roads"]`. Group layers themselves are still in the list (their name is still a valid target for `remove_layer`, `set_layer_visibility`, etc.).
+
+### Internal
+- `move_layer` is the one handler that intentionally still uses `Map.Layers` (top-level only). Reordering a layer "to position N" only makes sense at the top level — moving in/out of a group is a different operation conceptually, not yet supported. This is documented in a comment at the call site.
+- The duplicate-name limitation (multiple layers with the same name in different groups) remains: find-by-name picks the first match in TOC order. Pro's long-path notation (`Group1\Parcels`) would resolve this; that's a future enhancement, not blocking the current fix.
+
+---
+
+## [Feature Creation Primitives] — 2026-05-11
+
+Closes the "I have coordinates, I need features" gap that blocked the agent during a Network Analyst route attempt. Previously the only way to materialize features from coordinates was a CSV-on-disk + `XYTableToPoint` workflow, or hacks like `CalculateField` with an embedded `InsertCursor` (which hung Pro). Now the agent can write points or polygons directly via two trim-safe primitives.
+
+### Added
+- **`add_point_features(layer, features)`** — inserts point features into an existing point layer. `features` is a JSON array of `{x, y, attributes?}`. Coordinates are interpreted in the *layer's* spatial reference (no automatic reprojection). All inserts run in a single `EditOperation` — if any feature fails, none are committed. Returns `{added: N, oids: [...]}` for the freshly-inserted features.
+- **`add_polygon_features(layer, features)`** — same shape, polygon geometry. Each feature has a `vertices` array of `[x, y]` pairs (minimum 3); `PolygonBuilderEx` auto-closes the ring, so callers don't repeat the first vertex. Useful for Network Analyst polygon barriers, custom AOIs, and any single-ring polygon use case. Multi-ring polygons and polygons-with-holes are out of scope; for those, generate the feature via `run_gp_tool` with `JSONToFeatures`.
+
+### Fixed
+- **`EditOperation.ShowModalMessageAfterFailure = false`** in both `add_point_features` and `add_polygon_features`. The Pro SDK defaults this property to `true`, which is appropriate for UI-driven edits where the user wants feedback — but blocks automation flows when a benign post-edit message surfaces a modal "OK" dialog requiring manual dismissal. Errors are unaffected: they still flow through `editOp.ErrorMessage` and get captured as structured `{success: false, error: "..."}` responses to the agent.
+
+### Internal
+- Both handlers share a `SetAttributesOnBuffer` private helper that does case-insensitive field lookup and type-aware coercion of JSON values to ArcGIS field types (String, Integer, SmallInteger, Single, Double, Date, GUID, GlobalID). Date values arrive as ISO 8601 strings; GUIDs as standard hex strings. Geometry/OID/Blob/Raster fields are blocked — those are managed by the row's geometry or identity, not the caller's attributes.
+- Errors specify the failing feature's index ("feature[2].attributes references field 'Foo' which does not exist") so the agent can pinpoint which entry in its features array is bad. Particularly useful when the agent submits a batch of, say, 20 stop points and one has a typo.
+- `EditOperation.ExecuteAsync()` (not the synchronous Execute) so the QueuedTask runs the edit asynchronously, matching Pro SDK conventions and the existing `pro.zoomToLayer` pattern. Failure surfaces via `editOp.ErrorMessage` rather than a generic exception.
+- Tool count: 41 → 43. Both tools live in the README's "Map operations" section (they're feature-mutating operations, same conceptual neighborhood as `add_layer_from_*` and `export_layer`).
+
+---
+
+## [Layer Introspection Primitives] — 2026-05-11
+
+Adds four read-side primitives the agent was missing: ways to inspect a layer's schema, properties, attribute values, and current selection from a chat reply. Surfaced as a gap when reviewing the Network Analyst Route tutorial — the agent could compute a shortest route via `run_gp_tool('na.Solve', …)` but had no way to return the turn-by-turn `DirectionPoints` to the user. The four new tools generalize beyond that case: any "what fields exist on this layer," "tell me about this layer," "show me the first N rows," or "what's currently selected" question now has a direct answer.
+
+### Added
+- **`list_fields(layer)`** — returns each field's name, alias, type, length, isNullable, isEditable. Use before crafting `select_by_attribute` WHERE clauses or `run_gp_tool` calls that take field-name parameters.
+- **`get_layer_properties(layer)`** — returns layer type (FeatureLayer/RasterLayer/etc.), data source path, spatial reference (wkid + name), extent, visibility, geometry type, and feature count. Useful as a first-look "tell me about this layer" query before deciding what operations apply.
+- **`read_layer_attributes(layer, fields?, where?, orderBy?, limit?)`** — returns up to `limit` rows as JSON; each row is a field-name → value map. Geometry, Blob, and Raster fields are excluded from output. Default `limit` is 50, hard cap 1000. Response includes a `limited: true` flag when more rows exist than were returned.
+- **`get_selected_features(layer, fields?, limit?)`** — same JSON shape as `read_layer_attributes` but auto-scoped to the layer's current `Selection` (uses `Selection.Search()` rather than `FeatureClass.Search`). Closes the loop on `select_by_attribute`: previously the agent knew *how many* features got selected but couldn't see *which* ones without re-querying. Returns empty rows + `selectedTotal: 0` (not an error) when nothing is selected.
+
+### Fixed
+- **`fl.GetFeatureClass()` null check** in `count_features`, `list_fields`, `read_layer_attributes`, and `get_selected_features`. Layers whose underlying feature class can't be resolved (broken data source, unloaded analysis output, deleted gdb feature class — e.g., `_Allegan_W` in Test2.aprx) previously caused these tools to throw a generic `NullReferenceException`. Now they throw a structured `InvalidOperationException` with the message `"Layer '<name>' has no resolved feature class — its data source may be missing or unloaded."` which the bridge surfaces as a `{success: false, error: "..."}` response. Surfaced during smoke-test of the new introspection tools.
+
+### Internal
+- All four handlers use the throw-`InvalidOperationException`-from-QueuedTask pattern (matching `count_features`) so layer-not-found and field-not-found errors surface as structured `{success:false, error: "..."}` responses rather than generic MCP error wrappers.
+- `read_layer_attributes` and `get_selected_features` coerce `DateTime` to ISO 8601 strings and `Guid` to lowercase hex strings before serialization — both have JSON conversion issues if left as-is.
+- Tool count: 37 → 41. New "Layer introspection" domain added to the README's domain count (6 → 7).
+
+---
+
+## [Layer Lifecycle Tools] — 2026-05-11
+
+Closes a small but meaningful gap surfaced by interactive Copilot Studio use: the original tool set had `add_layer_from_*` to bring data into the map, but no way to remove, rename, hide, or reorder layers after the fact. Easy to overlook in transactional stdio workflows; obvious when conversational agents want to iterate.
+
+### Added
+- **`remove_layer`** — removes a layer from the active map's Table of Contents by name. Removes the TOC reference only; the underlying feature class on disk is not deleted (use `run_gp_tool management.Delete` for that). Works on any layer type, not just feature layers.
+- **`rename_layer`** — renames a layer in the active map. If the new name conflicts with an existing layer, Pro auto-uniquifies (e.g., 'Foo' → 'Foo (2)') and the returned `to` value reflects the actual post-rename name.
+- **`set_layer_visibility`** — show or hide a layer without removing it from the TOC. Useful when staging a map for export.
+- **`move_layer`** — reorder a layer in the TOC. Position is 0-based (0 is topmost); out-of-range values clamp silently to the valid range. Operates on top-level layers only; nested layers inside group layers are not yet supported.
+
+### Internal
+- All four bridge handlers use `Map.Layers` directly (not `OfType<FeatureLayer>` like the older `count_features`/`zoom_to_layer` handlers) so they apply to raster layers, web layers, group layers, and basemap layers — not just feature layers.
+- Position clamping in `move_layer` is silent rather than erroring. Rationale: an LLM saying "move it to the top" passes 0 reliably, but "to the bottom" might count nodes wrong and pass `Count` instead of `Count-1`. Clamping turns these near-misses into the intended behavior rather than confusing errors.
+
+---
+
+## [Dev script: full close-restart cycle automated] — 2026-05-11
+
+### Fixed
+- **`restart-dev-cycle.ps1` now detects the HTTP server by process command-line instead of scheduled-task `State`.** The original logic checked `Get-ScheduledTask | ?{ $_.State -eq 'Running' }`, but the VBS launcher exits immediately after spawning the exe — so Task Scheduler reports "Ready" while the server is alive in the background. Result: the script skipped its stop + restart logic and could leave Copilot Studio without an HTTP endpoint after a restart cycle. Fixed by filtering `Get-CimInstance Win32_Process` for `ArcGisMcpServer.exe` processes whose `CommandLine` contains `--http`, which is a reliable signature for HTTP-mode servers and distinguishes them from Claude Code's stdio MCP children.
+- **Always-restart-the-task guarantee via `try/finally`.** Previously, if step 3 ("Claude Code still has MCP server open") fired after we'd stopped the HTTP server in step 2, the script exited with the server still down. Now the HTTP task restart in step 9 runs from a `finally` block, so Copilot Studio's endpoint comes back up regardless of which intermediate step failed.
+- Added a post-start verification that re-inspects the process table for an `--http` server after `Start-ScheduledTask`, so genuine task-startup failures (exe crashes immediately, missing VBS, etc.) are flagged with a pointer to Task Scheduler's Event Viewer logs rather than silently leaving the user thinking the server is up.
+
+### Added
+- **`restart-dev-cycle.ps1` now handles the full close-restart cycle end-to-end.** Previously it wiped the AssemblyCache and rebuilt the MCP server, but users had to invoke MSBuild, copy the `.esriAddinX` into the AddIns folder, and (separately) keep the HTTP server's exe in sync — all by hand. The script now: (1) verifies Pro is closed, (2) stops the `ArcGisMcpServer-HTTP` scheduled task if running, (3) verifies no other `ArcGisMcpServer.exe` is held by Claude Code, (4) locates MSBuild via `vswhere` and rebuilds the Add-In, (5) wipes the AssemblyCache, (6) copies the freshly-built `.esriAddinX` into `%USERPROFILE%\Documents\ArcGIS\AddIns\ArcGISPro\{GUID}\`, (7) rebuilds the MCP server in `publish/`, (8) syncs `publish-http/` from `publish/` so the Copilot Studio path runs the same code, (9) restarts the HTTP scheduled task. Pro restart + Claude Code restart afterwards are the only remaining manual steps.
+
+### Internal
+- **Step ordering is build → wipe → deploy → MCP-rebuild → HTTP-sync** specifically so a build failure (step 4) bails before the cache wipe (step 5). The prior cache stays intact and the next Pro launch still works with the previously-deployed Add-In — failures don't degrade Pro's working state.
+- If the script bails between steps 2 (HTTP task stopped) and 9 (HTTP task restarted), it auto-restarts the task on the failure-exit path so Copilot Studio is never left in a worse state than before the script ran.
+- Uses `vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe'` to locate MSBuild rather than hard-coding the VS 2022 path; survives VS upgrades and edition swaps (Community/Professional/Build Tools).
+- README's "28 first-class tools" line corrected to "33" earlier in the day — leftover inconsistency from the trim-refactor doc pass that updated the intro paragraph but missed the "What it does" bullet.
+
+---
+
+## [Release Pipeline + Remote MCP + Trimming] — 2026-05-11
+
+Wrapped a sequence of three releases (`v0.1.0` → `v0.2.0` → `v0.3.0`) that took the project from a "build locally and copy files" workflow to a published GitHub release pipeline serving a remote-reachable, trimmed self-contained MCP server. The motivating use case is wiring the MCP server up to M365 Copilot Studio (which requires HTTPS reachability and authentication).
+
+### Added — v0.1.0 (CI release pipeline)
+- **`.github/workflows/release.yml`** — tag-triggered (`v*`) workflow that publishes the MCP server exe and creates a draft GitHub release with auto-generated release notes + `SHA256SUMS.txt`. ([`6ab5537`](../../commit/6ab5537))
+- **Conditional Add-In build job** gated on a self-hosted Windows runner with the `arcgis-pro` label and `vars.HAS_ARCGIS_RUNNER == 'true'`. Skipped on GitHub-hosted runners (no Pro SDK installed); when a self-hosted runner is registered, this job adds the `.esriAddinX` to the release automatically. Until then, the bundle is built locally and uploaded with `gh release upload`.
+
+### Added — v0.2.0 (HTTP transport for M365 Copilot Studio)
+- **Streamable HTTP transport** alongside the existing stdio transport. Opt-in via `--http` flag or `MCP_TRANSPORT=http` env var; stdio remains the default so local clients (Claude Code, etc.) keep working unchanged. The server hosts MCP at `/mcp` on `0.0.0.0:5000` by default (override with `ASPNETCORE_URLS`). ([`5ba74d6`](../../commit/5ba74d6))
+- **`X-Api-Key` bearer-token auth middleware** — HTTP mode requires `MCP_AUTH_TOKEN` env var and refuses to start without it. Every request must carry a matching `X-Api-Key` header; comparison is constant-time. An unauthenticated request returns 401 before reaching the MCP transport.
+- **Deployment alongside existing SWAG/nginx reverse proxy** — published at `https://example.invalid/mcp` via the home server's existing wildcard cert. nginx config requires `proxy_buffering off` + generous `proxy_read_timeout` because Streamable HTTP can promote a response into a long-lived SSE stream during tool calls.
+
+### Added — v0.3.0 (Trim-safe build)
+- **Self-contained trimmed single-file publish** (`--self-contained true -p:PublishTrimmed=true`) shrinks the MCP server exe from 92.7 MB → 21.4 MB (~77% reduction) and removes the .NET 8 runtime install requirement on end-user machines. ([`b140ae1`](../../commit/b140ae1))
+- **Source-generated `System.Text.Json` contexts** — `McpJsonContext` (compact, for line-delimited IPC over named pipe) and `IndentedJsonContext` (pretty, for tool output). Both registered in `Ipc/IpcModels.cs`.
+- **`<IsTrimmable>true</IsTrimmable>` + `<EnableTrimAnalyzer>true</EnableTrimAnalyzer>`** in the csproj — trim warnings now surface during normal `dotnet build`, not just at publish time. Future code that introduces reflection-based JSON or other non-trim-safe patterns will be caught at edit time.
+- **`FormatErrorPayload` record** replaces the anonymous type previously used in `ProTools.FormatResult`'s failure branch (anonymous types are fundamentally incompatible with source-gen).
+- **`IpcResponse.Data`** changed from `object?` to `JsonElement?` — preserves any JSON shape from the bridge while being trim-safe (`JsonElement` has built-in trim-annotated serialization).
+- **`WithTools<ProTools>()`** replaces both `WithToolsFromAssembly(typeof(ProTools).Assembly)` calls in `Program.cs`. `ProTools` is no longer `static` (methods stay static) so the generic registration can take it as a type argument — the generic overload is trim-safe; assembly scanning is not.
+
+### Fixed
+- **Anonymous-type return shape change in `ProTools.FormatResult`** — the previous `new { success, op, error }` payload was structurally identical to the new `FormatErrorPayload` record on the wire (same JSON keys, same values), so this is binary-compatible with existing MCP clients that parse the JSON.
+
+### Notes
+- **End-user install simpler**: `ArcGisMcpServer.exe` now runs on a clean Windows box without requiring .NET 8 SDK or runtime to be installed.
+- **`get_active_map_name`** verified end-to-end against a live ArcGIS Pro session post-trim: MCP transport → `WithTools<ProTools>` invocation → BridgeClient `IpcRequest` source-gen serialization → named pipe round trip → `IpcResponse` deserialization with `JsonElement Data` → `IndentedJsonContext` output formatting all work under trim.
+
+---
+
+## [Schema Completeness] — 2026-04-27
+
+Closes the remaining gap in the model-creation API: agents can now declare `GPComposite` parameter types with their accepted subtypes, matching what Pro's GUI writes when you drag-create a parameter from a composite slot (e.g., `CalculateField.in_table`, `AddJoin.in_layer_or_view`, `Sort.in_dataset`).
+
+### Added
+- **`compositeTypes` field on input parameter schema** — when paired with `type: "GPComposite"`, the writer emits a Pro-native composite datatype with the listed subtypes nested under `datatype.datatypes`. Example: `{"name": "InTable", "type": "GPComposite", "compositeTypes": ["GPTableView", "GPRasterLayer", "GPMosaicLayer"]}`. Without this, declaring a non-composite type (e.g., `GPFeatureLayer`) for a parameter that wires into a composite slot caused runtime validation mismatches (`ERROR 000840: The value is not a Table View`). With the schema extension, agents can express the slot-required composite directly. ([this commit])
+- **`describe_model` surfaces `compositeTypes` on round-trip** — when the underlying `tool.content` declares a `GPComposite` parameter with subtypes, `describe_model` now emits them as a `compositeTypes` string array, so an agent reading and re-writing the model preserves the structure. Falls back to reading from `tool.model` variable's datatype for explicit-typed params written by older clients.
+- **Tool description for `create_model` documents the full input parameter schema** — including `dependencies` and `compositeTypes`, with worked examples. Agents using the MCP tool now have the full schema in the description string (visible to LLM clients during tool selection), reducing the chance of fallback workarounds like declaring `GPString` for fields.
+- **README ModelBuilder section** documents the three input patterns (plain typed, Field with dependencies, GPComposite with subtypes) so users can author models programmatically without trial and error.
+
+### Internal
+- Extracted `BuildDataTypeJson(type, compositeTypes)` private helper in `AtbxManager`. Used at both write sites (`tool.model` variable + `tool.content` param) for symmetry. Composite expansion is no-op for non-`GPComposite` types — backward compatible by construction.
+- `GenerateModelFiles` now treats `GPComposite` as slot-derived (omits `datatype` from the `tool.model` variable, same convention as Field params with dependencies). Pro re-derives the composite at load time from the system_tool slot wiring.
+
+---
+
+## [Post-Cycle-B Hardening] — 2026-04-27
+
+This round addressed real-world friction surfaced when an agent built a complex model (`FatalFlawScreening`, ~30 steps, 13 inputs) against the bridge. Several latent bugs in `run_model` parameter handling and ModelBuilder schema generation had been masked because the previous test models were simpler. Also closes a thread-affinity gap on `save_project` and locale/Y-coord issues that escaped earlier rounds.
+
+### Added
+- **`pro.getViewDiagnostics` MCP wrapper** — the bridge handler existed since Round 3 Cycle A but lacked an MCP-side wrapper, so agents couldn't actually invoke it. Now exposed as `mcp__arcgis__get_view_diagnostics`. ([5ad7858](../../commit/5ad7858))
+- **`update_model` / `create_model` schema: optional `dependencies` field on input parameters** — when an agent declares `{ "name": "FieldName", "dependencies": ["LayerParam"] }`, the writer emits a Pro-native `Field`-typed parameter with `depends: ["LayerParam"]` in `tool.content` and slot-derived datatype on the model graph variable (no explicit `datatype` on the variable itself, matching what Pro writes when you drag-create a Field parameter from a tool slot). Closes the last gap in programmatic ModelBuilder model creation: agents can now express Field parameters that validate against a feature/table input layer, instead of falling back to `GPString` (which Pro then rejects with `ERROR 000860: Zone field is not the type of Field`). Verified by round-trip + execution test against a `PairwiseDissolve` model.
+
+### Fixed
+- **`run_model` — defaults didn't flow through; missing params now use arcpy `"#"` sentinel** — Empty string was treated by arcpy as an *explicit* empty value, causing `ERROR 000735: Value is required` for required params and overriding declared defaults for optional ones. Symptom: running a model with most params unspecified produced 10+ `Value is required` errors even when all those params had declared defaults in the `.atbx` (REST URLs, `"500 Feet"`, etc.). The `"#"` sentinel is arcpy's long-standing convention for "use the parameter's declared default." Empty-string-as-explicit-value intent is preserved (if the user passes `{"FieldName": ""}` the dict still contains the key with empty value, and that `""` passes through unchanged). ([da94901](../../commit/da94901))
+- **`run_model` — named-parameter dict produced positional shifts when caller order ≠ model declared order** — Agents pass parameters as a JSON object dict, but ModelBuilder binds positionally (arcpy convention). Without an explicit reorder, dict insertion order became the implicit positional order, and any mismatch (especially when the model has parameters the user didn't supply, like `Output_Workspace`) shifted every subsequent value into the wrong slot. Symptom: an arcpy error referencing a parameter NAME the user never typed, with a value that was meant for a different parameter. Now: read the model's declared parameter order via `AtbxManager.DescribeModel` and remap. ([7fa87a5](../../commit/7fa87a5))
+- **`describe_model` — read-side: lied about Field parameters as `GPString`** — Pro omits `datatype` on Parameter variables in `tool.model` whose type is slot-derived (Field params, etc.) — Pro re-derives type+dependency from the `system_tool` slot at load time. Our `SimplifyModel` was falling back to `"GPString"` when `datatype` was absent, which misrepresented slot-derived params as plain strings to AI agents. Agents then echoed `"GPString"` back via `update_model`, baking an explicit type that overrode Pro's slot inference and broke validation. Fixed: `type` field is now omitted from describe output when datatype is absent on the variable (signaling slot-derived). Also reads `depends` from `tool.content` and surfaces as `dependencies` array, so round-tripping preserves Field-parameter dependencies.
+- **`save_project` — thread-affinity exception** — `Project.Current.SaveAsync()` requires the WPF GUI thread; calling it from `QueuedTask.Run` raised `"The calling thread cannot access this object because a different thread owns it."` Same fix pattern as F1/F2: wrap in `Application.Current.Dispatcher.InvokeAsync(() => Project.Current.SaveAsync())` and unwrap the nested Task. Also surfaced silent save-first failures in `HandleCreateProject`/`HandleOpenProject` that had been swallowing the same root cause. ([28af4bf](../../commit/28af4bf))
+- **`add_map_frame_to_layout` — Y-coordinate convention mismatch** — The MCP tool description tells agents that `xInches`/`yInches` are measured from the page top-left (the screen-coords convention universal in web/UI work). Pro SDK layout coords are bottom-up — y=0 is the page bottom, increasing toward the top. Without inversion, an agent passing `y=1.0` expecting "near the top" silently got a frame near the bottom. Now the handler inverts internally: `sdkYmin = pageHeight - y - h; sdkYmax = pageHeight - y;`. ([75e9e9b](../../commit/75e9e9b))
+- **Locale-dependent number parsing across `create_layout`, `add_map_frame_to_layout`, `export_layout`** — `double.TryParse(string)` and `int.TryParse(string)` use the *current culture*'s decimal separator. On non-US locales where `,` is the decimal separator, the bare overload silently fails to parse `"11.5"` and falls through to default values without error. Now: `NumberStyles.Float` + `CultureInfo.InvariantCulture` everywhere user numeric strings cross the bridge. ([e408667](../../commit/e408667))
+
+---
+
+
+
+### Added
+- **`pro.addLayerFromFile`** — load shapefiles, file-geodatabase feature classes (composite paths like `path/to.gdb/FeatureClass`), and rasters from a local path. Closes the URL-only ingestion gap. ([dc02b19](../../commit/dc02b19), MCP wrapper [c085033](../../commit/c085033))
+- **`pro.createLayout`** — create a blank layout with configurable size/orientation (default letter-landscape). ([dc02b19](../../commit/dc02b19))
+- **`pro.addMapFrameToLayout`** — wire an existing map into a layout via a map-frame element at a given page rectangle. The step that turns `create_layout`'s blank canvas into a renderable layout. ([dc02b19](../../commit/dc02b19))
+- **`pro.listMaps`** — enumerate all maps in the project (complements `get_active_map_name` which only returns the active one). ([dc02b19](../../commit/dc02b19))
+- **`pro.saveProject`** — explicit `Project.Current.SaveAsync()`. Useful as a pre-op safety rail or for persisting batch edits. ([dc02b19](../../commit/dc02b19))
+- **`restart-dev-cycle.ps1`** — one-shot helper that verifies Pro/MCP-server are closed, wipes the per-user AssemblyCache, and rebuilds the MCP server exe. Eliminates manual coordination between Add-In + MCP-server change cycles. ([97364fb](../../commit/97364fb))
+
+> Status as of latest commit: 5 handlers + 5 MCP wrappers committed and deployed; runtime verification deferred to user.
+
+---
+
+## [Round 3 Cycle A] — 2026-04-23
+
+### Added
+- **`pro.getViewDiagnostics`** — exposes raw `Map.SpatialReference`, `Extent.SpatialReference`, `Camera` (X/Y/Z/Scale/Heading/Pitch/Roll), and `Map.CalculateFullExtent()` separately. First-class diagnostic for projection/extent debugging. ([03a2335](../../commit/03a2335))
+- **`pro.getProjectInfo`** — project-level metadata: name, .aprx path, home folder, default geodatabase, default toolbox, counts of maps/layouts/toolboxes, active map info. Lets agents orient before operating. ([3462640](../../commit/3462640), MCP wrapper [edb2d48](../../commit/edb2d48))
+- **`pro.clearSelection`** — first-class clear-selection. With no args, clears every feature layer; with a layer name, clears just that one (errors on missing layer). Replaces the `run_gp_tool("management.SelectLayerByAttribute", [...CLEAR_SELECTION...])` workaround. ([3462640](../../commit/3462640), MCP wrapper [edb2d48](../../commit/edb2d48))
+
+### Fixed
+- **G1 — extent values can exceed SR valid bounds** — `MapView.Extent` returns the literal geometric viewport rectangle centered on the camera at the current scale, which can extend past ±180°/±90° when zoomed out far enough that the rectangle is bigger than Earth. Pro doesn't clamp to the SR valid domain. Now: for geographic SRs, clamp `xmin/ymin/xmax/ymax` to `±180/±90` and report `clampedToSrValidRange: true` only when at least one bound was actually trimmed. ([f9e5579](../../commit/f9e5579), polish [afc635a](../../commit/afc635a))
+- **R3-2 — timeouts no longer trigger 4 retries × full timeout duration** — A genuine handler hang won't be resolved by retrying for 8 more minutes. `BridgeClient` now returns a structured `{success:false, error:"timeout: ..."}` response immediately on timeout, bypassing the retry loop. Transient connection errors (broken pipe, pipe-not-yet-up) still retry with backoff. ([3bfe6c1](../../commit/3bfe6c1))
+- **NaN/Infinity in JSON responses** — Pro SDK returns `NaN` for properties that don't apply to the current view mode (`Camera.Z` in 2D, etc.). Default `System.Text.Json` throws `ArgumentException` mid-serialization. `SendAsync` now uses `JsonNumberHandling.AllowNamedFloatingPointLiterals` so these values serialize as `"NaN"`/`"Infinity"` strings instead of breaking the response. ([e4eb41d](../../commit/e4eb41d))
+
+### Superseded
+- **G1 first attempt — reproject Extent to Map SR** ([7389d0c](../../commit/7389d0c)) was a no-op because both SRs report as the same WGS84 even when the numeric values clearly aren't in WGS84 space. The diagnostic at `03a2335` revealed the real root cause (geometric rectangle exceeding SR domain), and `f9e5579` is the correct fix. The original commit is left in history for traceability.
+
+---
+
+## [Round 2] — 2026-04-23
+
+### Added
+- **Logger gap closure** — `RunAsync` now calls `LogNonSuccess(req, resp.Error)` after `HandleAsync` returns when `!resp.Ok`. Previously only thrown exceptions reached `mcp-bridge.log`; structured `{success:false}` returns from F5/F6-style failure paths left no audit trail. New `LogNonSuccess` helper mirrors `LogException` structure. ([a584d12](../../commit/a584d12))
+
+### Fixed
+- **G2 — typed-return MCP tools collapsed structured errors to generic** — `GetActiveMapName`, `ListLayers`, `CountFeatures`, `ZoomToLayer` used `throw new Exception(r.Error)` on bridge failure. The MCP SDK swallows thrown exception messages, leaving only `"An error occurred invoking 'X'"`. Unified to `Task<string>` + `FormatResult` so bridge errors reach the agent as structured JSON. Slight response-shape change on success: `count_features` now returns `{"count": 51}` instead of bare `51`, etc. ([c711551](../../commit/c711551))
+- **G3 — `pro.zoomToLayer` returned `true` on missing layer** — F4-class silent-success. Now throws `InvalidOperationException` ⇒ structured error. ([bd364c0](../../commit/bd364c0))
+- **G4 — `pro.runGPTool` returned `"GP tool failed: "` empty body when `result.Messages` was empty** — F5-class empty-error-body. Now produces a tool-name-aware fallback message. ([619d723](../../commit/619d723))
+- **G5 — `BridgeClient.RequestTimeoutMs` raised from 30s to 120s** — `create_project` on a fresh template can take 60+ seconds (template copy, .gdb init, UI initialization). The 30s default cut off mid-operation, returning a generic error while Pro kept grinding. 120s default handles slow Pro ops; per-tool override still available via `ARCGIS_MCP_REQUEST_TIMEOUT_MS`. ([832a133](../../commit/832a133))
+- **G7 — MCP server held stale pipe state across Pro restarts** — `BridgeDiscovery.Discover()` was called exactly once at MCP server startup; the result was pinned in the singleton `BridgeClient`. When Pro restarted with a new PID, every subsequent tool call tried to connect to the dead pipe. `BridgeClient` now takes a `Func<string>` resolver and re-invokes it inside `SendOnceAsync`, so per-request rediscovery follows Pro across restarts automatically. ([27672f8](../../commit/27672f8))
+
+---
+
+## [Round 1] — 2026-04-23
+
+Original audit identified seven concrete bugs in `ProBridgeService.cs`. All fixed and verified via the Phase 1–8 regression suite.
+
+### Fixed
+- **F1 — `HandleCreateProject` thread-affinity exception + modal "Save?" dialog** — `Project.CreateAsync` requires the WPF GUI thread. `QueuedTask.Run` puts work on the MCT, which raises `"The calling thread cannot access this object because a different thread owns it."`. Final fix: wrap body in `await System.Windows.Application.Current.Dispatcher.InvokeAsync(() => Project.CreateAsync(settings))` and unwrap the nested `Task`. Also calls `Project.Current.SaveAsync()` first to suppress the modal "Save?" dialog. ([927c086](../../commit/927c086) → [970c07f](../../commit/970c07f) → [7e822ea](../../commit/7e822ea))
+- **F2 — `HandleOpenProject` thread-affinity** — same class as F1; same fix pattern. ([7a63be3](../../commit/7a63be3) → [970c07f](../../commit/970c07f) → [7e822ea](../../commit/7e822ea))
+- **F3 — `HandleOpenLayout` GUI-thread exception** — `FrameworkApplication.Panes.CreateLayoutPaneAsync` is GUI-thread-only, not MCT. Layout-item lookup stays in `QueuedTask.Run`; the pane creation moves to `FrameworkApplication.Current.Dispatcher.InvokeAsync`. ([20197f5](../../commit/20197f5))
+- **F4 — `HandleCountFeatures` returned `0` silently for missing layers** — `if (fl == null) return 0;` collapsed two distinct cases (layer exists with 0 features, layer doesn't exist) into the same response. Agents cascaded wrong actions off the silent zero. Now throws `InvalidOperationException($"Layer not found: {layerName}")`. ([df6d3fc](../../commit/df6d3fc))
+- **F5 — `HandleRunModel` returned `"Model execution failed: "` with empty body** — when arcpy failed before emitting messages, `string.Join("; ", result.Messages)` produced an empty string. Now defensive: filter for `GPMessageType.Error`, fall back to a tool-name-aware "no messages" string. ([ce028e1](../../commit/ce028e1))
+- **F6 — `HandleExportLayout` returned `success:true` for writes that didn't land** — `layout.Export(ef)` doesn't always throw on permission failure (UAC VirtualStore quietly redirects writes to System32, leaving the file at `%LOCALAPPDATA%\VirtualStore\...` instead of the requested path). Now wraps `Export` in try/catch AND post-checks `File.Exists(output)`; returns `{success:false, error:"file was not written"}` if the export silently no-op'd. ([50d3a20](../../commit/50d3a20))
+- **F7 — `HandleRunGPTool` raised `InvalidOperationException` on nested-array params** — GP tools that take value-tables (`management.CalculateGeometryAttributes`, `management.JoinField`, `analysis.SpatialJoin` field-map, etc.) passed parameters as `[["field", "property"], ...]`. The handler called `.GetValue<string>()` on each element, which throws on `JsonArray`. New `FlattenGpParam(JsonNode)` helper recursively flattens two-level arrays into arcpy's value-table string syntax (`"f1 v1;f2 v2"`). ([3333950](../../commit/3333950))
+
+---
+
+## [Pre-rounds] — earlier 2026-04
+
+Initial implementation, ModelBuilder integration, IPC resilience, container packaging.
+
+### Added
+- **ModelBuilder tools** — `create_toolbox`, `create_model`, `describe_model`, `update_model`, `run_model`, `list_models`. Includes `AtbxManager.cs` for `.atbx` ZIP marshalling (the file format is a ZIP of JSON model definitions, **not** SQLite as the file extension suggests). ([11e8943](../../commit/11e8943))
+- **Project/layer/layout tools** — `create_project`, `open_project`, `add_layer_from_url`, `list_layouts`, `open_layout`, `list_layout_elements`, `set_layout_text`, `export_layout`. ([a5f5c84](../../commit/a5f5c84))
+- **Per-Pro-instance pipe routing** — Each Pro instance binds `ArcGisProBridge_<PID>` and writes a registry entry at `%LOCALAPPDATA%\ArcGisMcpBridge\<PID>.json`. Replaces the legacy single hard-coded `ArcGisProBridgePipe`. Multiple Pros can each have their own bridge. ([0eb417c](../../commit/0eb417c))
+- **Single-file MCP server publish** — `.mcp.json` points at `McpServer/ArcGisMcpServer/publish/ArcGisMcpServer.exe` instead of `dotnet run`. Faster cold start; published via `build-mcp-server.ps1`. ([0eb417c](../../commit/0eb417c))
+- **IPC retry & timeout** — `BridgeClient` now retries failed pipe calls with exponential backoff and enforces a per-request timeout. Defaults overridable via `ARCGIS_MCP_*` env vars. ([5a579c8](../../commit/5a579c8))
+- **Container image** — `McpServer/ArcGisMcpServer/Dockerfile` for packaging/distribution. (Note: named pipes don't traverse Linux container boundaries; image is for Windows-container hosts that share the pipe namespace.) ([5a579c8](../../commit/5a579c8))
+- **Surface bridge errors** — error text from the Add-In propagates to MCP responses instead of being swallowed. ([a10ab9c](../../commit/a10ab9c))
+
+### Fixed
+- **`MakeEnvironmentArray` named-arg call** — was being called with a positional `Dictionary<string,object>`, which bound to the first parameter (`workspace`) and produced cryptic `RuntimeBinderException` about `MapMember`. Fixed to use named-argument syntax. ([8c1d58b](../../commit/8c1d58b))
+- **JSON serializer for `JsonNode`** — naive `new JsonSerializerOptions { WriteIndented = true }` threw `"TypeInfoResolver not specified"` when serializing custom JsonValue types. Now derives from `JsonSerializerOptions.Default` to inherit `DefaultJsonTypeInfoResolver`. ([a79f528](../../commit/a79f528))
+- **GP runs hit `ERROR 000210` on output already exists** — `overwriteOutput` is now enabled for model/GP runs so programmatic invocation is idempotent-friendly. ([505c222](../../commit/505c222))
+- **ATBX manager: three bugs found in first end-to-end test** — fixed during initial validation. ([3b36dd7](../../commit/3b36dd7))
+
+---
+
+## Verification status
+
+| Round | Verified | Method |
+|---|---|---|
+| Pre-rounds | yes | initial validation |
+| Round 1 (F1–F7) | yes | Phase 1–8 regression suite via MCP routing |
+| Round 2 Cycle A (G3, G4, Logger) | yes | direct-pipe smoke tests |
+| Round 2 Cycle B (G2, G5, G7) | yes | post-rebuild MCP routing |
+| Round 3 Cycle A (G1, R3-2, getViewDiagnostics, NaN serializer) | yes | direct-pipe + post-rebuild MCP |
+| Round 3 Cycle A (R3-3, R3-4) | yes | post-rebuild MCP routing |
+| Round 3 Cycle B (R3-5..R3-8) | **deferred** | code compiles clean on both sides; runtime verification awaiting user |
+
+---
+
+## Fix-pattern lineage (cheatsheet)
+
+Future contributors should recognize these proven patterns. Each row shows where the pattern was first introduced — rather than reinventing, copy the idiom.
+
+| Pattern | First introduced in |
+|---|---|
+| WPF Dispatcher + nested-Task unwrap for project ops | F1/F2 ([7e822ea](../../commit/7e822ea)) |
+| GUI-thread dispatch for layout panes | F3 ([20197f5](../../commit/20197f5)) |
+| Throw `InvalidOperationException` on missing ref | F4 ([df6d3fc](../../commit/df6d3fc)) |
+| Defensive GP error message with tool-name fallback | F5 ([ce028e1](../../commit/ce028e1)) / G4 ([619d723](../../commit/619d723)) |
+| `try { sdk(); } catch + File.Exists` post-check for silent-success | F6 ([50d3a20](../../commit/50d3a20)) |
+| `FlattenGpParam` two-level arcpy value-tables | F7 ([3333950](../../commit/3333950)) |
+| `Task<string>` + `FormatResult` for all MCP wrappers | G2 ([c711551](../../commit/c711551)) |
+| Per-request `Func<string>` pipe rediscovery | G7 ([27672f8](../../commit/27672f8)) |
+| Timeout returns structured response, doesn't retry | R3-2 ([3bfe6c1](../../commit/3bfe6c1)) |
+| `LogNonSuccess` for `{success:false}` audit trail | Logger gap ([a584d12](../../commit/a584d12)) |
+| Geographic-SR clamp to ±180/±90 | G1 ([f9e5579](../../commit/f9e5579)) |
+| `JsonNumberHandling.AllowNamedFloatingPointLiterals` for NaN doubles | NaN serializer ([e4eb41d](../../commit/e4eb41d)) |

@@ -1,0 +1,12 @@
+{
+  "version": "3.0.1",
+  "date": "2026-09-26",
+  "upstreamCommit": "4fef4836cc3f7fafc026d435890d96943821b23e",
+  "offlineChecksPassed": 129,
+  "successfulDistinctTools": 84,
+  "installedAddInMatchesRuntime": true,
+  "addInSHA256": "CFC8487380908D8E858AE225F2A6B408BB7496404C1A65E38804EE8A1BDD4043",
+  "serverAssemblySHA256": "27685B53CC7E3DE5F19FFD50C441C9B5535F3587F8BD46ED212F4529C6914F06",
+  "creditsAndLicensesPreserved": true,
+  "personalConfigurationAndRawEvidenceIncluded": false
+}

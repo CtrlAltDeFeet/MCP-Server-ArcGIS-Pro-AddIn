@@ -1,23 +1,23 @@
-<ArcGIS defaultAssembly="APBridgeAddIn.dll" defaultNamespace="APBridgeAddIn" xmlns="http://schemas.esri.com/DADF/Registry" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
-  <AddInInfo id="{c56ccfd4-f12a-4916-84c2-64248b3d746c}" version="1.0" desktopVersion="3.6.59527" product="ArcGISPro">
-    <Name>APBridgeAddIn</Name>
-    <Description>MCP Server bridge for ArcGIS Pro - enables Claude to interact with Pro via ModelContext Protocol</Description>
+<ArcGIS defaultAssembly="ArcGISProMcpExtendedAddIn.dll" defaultNamespace="APBridgeAddIn" xmlns="http://schemas.esri.com/DADF/Registry">
+  <AddInInfo id="{72dd2cd1-b63c-4c68-bab4-4ef6c41717fa}" version="3.0.1" desktopVersion="3.7.0" product="ArcGISPro">
+    <Name>ArcGIS MCP Extended Hardened</Name>
+    <Description>Hardened local MCP bridge for compatible AI clients, with configurable capabilities.</Description>
     <Image>Images\AddInDesktop32.png</Image>
-    <Author>lucasmcoleman</Author>
+    <Author>Local hardened build; upstream contributors credited in PROVENANCE.md</Author>
     <Company></Company>
-    <Date>4/1/2026</Date>
+    <Date>9/26/2026</Date>
     <Subject>Framework, Geoprocessing</Subject>
   </AddInInfo>
   <modules>
-    <insertModule id="APBridgeAddIn_Module" className="Module1" autoLoad="true" caption="MCP Bridge">
+    <insertModule id="HardenedExtended_Module" className="Module1" autoLoad="false" caption="MCP Bridge">
       <groups>
-        <group id="APBridgeAddIn_Group1" caption="MCP Server" appearsOnAddInTab="true">
-          <button refID="APBridgeAddIn_Button1" size="large" />
+        <group id="HardenedExtended_Group1" caption="MCP Extended Hardened" appearsOnAddInTab="true">
+          <button refID="HardenedExtended_Button1" size="large" />
         </group>
       </groups>
       <controls>
-        <button id="APBridgeAddIn_Button1" caption="MCP Bridge Status" className="Button1" loadOnClick="true" smallImage="Images\AddInDesktop16.png" largeImage="Images\AddInDesktop32.png">
-          <tooltip heading="MCP Bridge">Show bridge status and restart the named-pipe server if needed<disabledText /></tooltip>
+        <button id="HardenedExtended_Button1" caption="Start / stop extended bridge" className="Button1" loadOnClick="true" smallImage="Images\AddInDesktop16.png" largeImage="Images\AddInDesktop32.png">
+          <tooltip heading="MCP Bridge">Start or stop the hardened extended bridge<disabledText /></tooltip>
         </button>
       </controls>
     </insertModule>

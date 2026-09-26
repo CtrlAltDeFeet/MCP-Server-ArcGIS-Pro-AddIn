@@ -1,0 +1,74 @@
+== create_toolbox guard ==
+  PASS  toolbox created
+  PASS  create_toolbox refuses overwrite
+  PASS  create_toolbox overwrite=true succeeds
+== create_model: multi-ref, forward ref, preconditions, env, output param ==
+  PASS  create_model with forward ref + multi-ref + output param
+  PASS  inputs exclude output parameter
+  PASS  both steps present after round-trip
+  PASS  multi-input ref array round-trips
+  PASS  output 'parameter: true' round-trips
+  PASS  GPComposite output coerced to DEFeatureClass
+  PASS  preconditions round-trip
+  PASS  per-step environment round-trips
+  PASS  numeric JSON literal coerced to string
+== update_model idempotence (describe → update → describe) ==
+  PASS  describe→update→describe is stable
+  PASS  post-update inputs keep membership and order
+== interface fidelity: optional / exposed / parameterOrder ==
+  PASS  optional input writes tool.content type:optional
+  PASS  required input carries no tool.content type flag
+  PASS  describe surfaces optional:true
+  PASS  required input has no optional flag in describe
+  PASS  parameterOrder covers full interface incl. derived output
+  PASS  optional-flag model round-trip stable
+  PASS  no dangling $rc: displayname refs after update
+  PASS  output-parameter rc title key present
+  PASS  describe orders inputs by tool.content; strays last
+  PASS  stray Parameter variable marked exposed:false
+  PASS  parameterOrder mirrors doctored tool.content order
+  PASS  update_model preserves tool.content param order
+  PASS  stray variable NOT promoted into public interface
+  PASS  optionality preserved through Pro-authored round-trip
+  PASS  stray variable preserved in tool.model (flag + default)
+  PASS  Pro-authored-shape round-trip idempotent
+  PASS  GetToolSignature reflects preserved order, no stray
+== pythonScriptTool classification (5th process shape) ==
+  PASS  .pyt step kind survives round-trip (not unknown)
+  PASS  .pyt relative path survives round-trip
+  PASS  writer stores tool_type PythonScriptTool verbatim
+  PASS  .pyt-step model round-trip idempotent
+  PASS  WalkModel classifies PythonScriptTool
+== WalkModel: topo order, multi-ref edges, env parse ==
+  PASS  two processes walked
+  PASS  topo sort places Merge before Buffer (data edge + precondition)
+  PASS  WalkModel captures both multi-ref ids
+  PASS  WalkModel parses per-step environments
+  PASS  WalkModel parses preconditions
+== iterator guard ==
+  PASS  writer rejects iterator kind
+== duplicate-name guard ==
+  PASS  writer rejects duplicate name with clear message
+== update_model preserves unrecognized model-level metadata ==
+  PASS  update_model preserves unrecognized tool.model root key ('environments')
+  PASS  update_model preserves unrecognized tool.content root key ('customFlag')
+== surgical writes ==
+  PASS  set_parameter_default applies
+  PASS  set_step_parameter applies
+== SystemToolboxCatalog (requires ArcGIS Pro installed; auto-skips when absent) ==
+  PASS  Buffer signature from system toolboxes matches arcpy order
+  PASS  Merge signature resolved dynamically (not hand-pinned)
+  PASS  AddField field_type coded domain extracted
+  PASS  SearchTools finds PairwiseBuffer
+  PASS  Merge output slot derived dynamically
+  PASS  hand-pinned signatures still win via ResolveSignature
+== nested-execution helpers: ResolveToolReference + GetToolSignature ==
+  PASS  bare name resolves to same toolbox
+  PASS  relative ref resolves against atbx-as-directory
+  PASS  absolute ref passes through
+  PASS  GetToolSignature returns declared param order
+  PASS  GetToolSignature flags output direction
+  PASS  GetToolSignature null for missing tool
+  PASS  GetToolSignature null for binary .tbx
+
+60 passed, 0 failed

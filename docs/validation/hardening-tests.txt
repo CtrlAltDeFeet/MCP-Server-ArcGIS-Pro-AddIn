@@ -1,0 +1,70 @@
+PASS: schema read allowed by default
+PASS: cartography allowed by default
+PASS: default denies pro.deleteFeatures
+PASS: default denies pro.runGPTool
+PASS: default denies pro.runModel
+PASS: default denies pro.executePython
+PASS: default denies pro.createProject
+PASS: unknown operations fail closed
+PASS: malformed policy fails closed
+PASS: unknown capability fails closed
+PASS: unknown policy properties fail closed
+PASS: null capabilities fail closed
+PASS: explicit Editing opt-in permits edits
+PASS: Editing does not enable Python
+PASS: new output in root accepted
+PASS: output traversal rejected
+PASS: root-prefix sibling rejected
+PASS: relative output rejected
+PASS: UNC output rejected
+PASS: alternate stream rejected
+PASS: DOS device filename rejected
+PASS: trailing-dot/space alias rejected
+PASS: output overwrite rejected
+PASS: existing output preserved
+PASS: junction fixture created without elevation
+PASS: junction/reparse output rejected
+PASS: default capture placed in output root
+PASS: full-path pin distinguishes identical filenames
+PASS: ambiguous bare pin rejected
+PASS: unconfigured multi-project routing rejected
+PASS: missing full-path pin never falls back
+PASS: project switch rejected at dispatch
+PASS: case-insensitive duplicate layers rejected
+PASS: bounded transport roundtrip
+PASS: operation may exceed idle deadline after request is read
+PASS: handler exceptions do not kill listener
+PASS: oversized response rejected and listener recovers
+PASS: idle client disconnected; subsequent request succeeds
+PASS: invalid frame length recovered: 2147483647
+PASS: invalid frame length recovered: -1
+PASS: invalid frame length recovered: 0
+PASS: malformed JSON recovered
+PASS: partial frame disconnect recovered
+PASS: first pipe instance reservation prevents impostor listener
+PASS: client rejects same-user pipe owned by non-ArcGIS process
+PASS: shutdown releases idle listener for restart
+PASS: lost response after mutation is not replayed
+PASS: MCP handshake 2024-11-05
+PASS: 84 tools discoverable with schemas
+PASS: extended tools and capability inspector present
+PASS: raw operation gateway is not mislabeled read-only
+PASS: raw gateway respects policy and missing-project isolation
+PASS: ping works without ArcGIS
+PASS: MCP respects policy and missing-project isolation: execute_python
+PASS: MCP respects policy and missing-project isolation: delete_features
+PASS: missing project produces actionable MCP error
+PASS: clean MCP EOF shutdown
+PASS: logging restricted to stderr
+PASS: MCP handshake 2025-06-18
+PASS: 84 tools discoverable with schemas
+PASS: extended tools and capability inspector present
+PASS: raw operation gateway is not mislabeled read-only
+PASS: raw gateway respects policy and missing-project isolation
+PASS: ping works without ArcGIS
+PASS: MCP respects policy and missing-project isolation: execute_python
+PASS: MCP respects policy and missing-project isolation: delete_features
+PASS: missing project produces actionable MCP error
+PASS: clean MCP EOF shutdown
+PASS: logging restricted to stderr
+All 69 checks passed.

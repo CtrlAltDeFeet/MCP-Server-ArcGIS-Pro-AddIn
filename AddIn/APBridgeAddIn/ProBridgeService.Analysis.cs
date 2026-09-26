@@ -40,7 +40,7 @@ namespace APBridgeAddIn
 
             const int distinctCap = 10000;
 
-            var data = await QueuedTask.Run<object>(() =>
+            var data = await CheckedRun<object>(() =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);
@@ -49,7 +49,7 @@ namespace APBridgeAddIn
                         $"'{member.Name}' has no attribute table.");
 
                 var field = table.GetDefinition().GetFields()
-                    .FirstOrDefault(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase))
+                    .SingleOrDefault(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase))
                     ?? throw new InvalidOperationException(
                         $"Field not found: {fieldName}. Fields: " +
                         string.Join(", ", table.GetDefinition().GetFields().Select(f => f.Name)));
@@ -148,7 +148,7 @@ namespace APBridgeAddIn
 
             // Resolve both layers up front for friendly errors (the GP error for
             // a bad layer name is comparatively cryptic).
-            var resolveError = await QueuedTask.Run<string?>(() =>
+            var resolveError = await CheckedRun<string?>(() =>
             {
                 var map = MapView.Active?.Map;
                 if (map == null) return "No active map view";
@@ -178,7 +178,7 @@ namespace APBridgeAddIn
                 return new(false, $"SelectLayerByLocation failed: {messages}", null);
             }
 
-            var selectedCount = await QueuedTask.Run<long>(() =>
+            var selectedCount = await CheckedRun<long>(() =>
             {
                 var map = MapView.Active?.Map;
                 var member = map != null ? FindMapMemberByName(map, layerName) : null;

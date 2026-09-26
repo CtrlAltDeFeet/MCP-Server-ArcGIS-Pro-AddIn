@@ -64,7 +64,7 @@ namespace APBridgeAddIn
             args.TryGetValue("field", out string? field);
             args.TryGetValue("colorRamp", out string? rampName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);
@@ -147,7 +147,7 @@ namespace APBridgeAddIn
                 return new(false, "arg 'layer' required", null);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);

@@ -45,7 +45,7 @@ namespace APBridgeAddIn
                 output = Path.Combine(capDir, $"map_view_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             }
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var view = MapView.Active;
                 if (view == null)
@@ -108,7 +108,7 @@ namespace APBridgeAddIn
             if (args.TryGetValue("wkid", out string? wkidStr))
                 int.TryParse(wkidStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out wkid);
 
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var view = MapView.Active;
                 if (view == null) return new(false, "No active map view", null);
@@ -137,7 +137,7 @@ namespace APBridgeAddIn
             if (args == null || !TryGetDouble(args, "scale", out double scale) || scale <= 0)
                 return new(false, "arg 'scale' (positive number, e.g. 24000 for 1:24,000) required", null);
 
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var view = MapView.Active;
                 if (view == null) return new(false, "No active map view", null);
@@ -151,7 +151,7 @@ namespace APBridgeAddIn
         /// <summary>Zooms to the union of all selected features in the active map.</summary>
         private static async Task<IpcResponse> HandleZoomToSelected()
         {
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var view = MapView.Active;
                 if (view == null) return new(false, "No active map view", null);
@@ -169,7 +169,7 @@ namespace APBridgeAddIn
             string? mapName = null;
             args?.TryGetValue("map", out mapName);
 
-            var data = await QueuedTask.Run<object>(() =>
+            var data = await CheckedRun<object>(() =>
             {
                 var map = ResolveMap(mapName);
                 return map.GetBookmarks().Select(b => new
@@ -196,12 +196,12 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(name))
                 return new(false, "arg 'name' required", null);
 
-            return await QueuedTask.Run<IpcResponse>(async () =>
+            return await CheckedRun<IpcResponse>(async () =>
             {
                 var view = MapView.Active;
                 if (view == null) return new(false, "No active map view", null);
                 var bookmark = view.Map.GetBookmarks()
-                    .FirstOrDefault(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(b => b.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (bookmark == null)
                     return new(false,
                         $"Bookmark not found: {name}. Available: " +
@@ -218,7 +218,7 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(name))
                 return new(false, "arg 'name' required", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var view = MapView.Active;
                 if (view == null) return new(false, "No active map view", null);

@@ -10,7 +10,8 @@ namespace ArcGisMcpServer.Ipc
     // (deserialized as default/missing on the other side, no compile error).
     public record IpcRequest(
         [property: JsonPropertyName("op")] string Op,
-        [property: JsonPropertyName("args")] Dictionary<string, string>? Args
+        [property: JsonPropertyName("args")] Dictionary<string, string>? Args,
+        [property: JsonPropertyName("projectPath")] string? ProjectPath = null
     );
 
     // Data is JsonElement? (not object?) so the source-gen serializer can

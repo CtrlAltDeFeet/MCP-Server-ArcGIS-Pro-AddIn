@@ -1276,8 +1276,6 @@ namespace APBridgeAddIn.ModelBuilder
             double currentY = 100;
             const double xSpacing = 250;
             const double ySpacing = 120;
-            const double nodeWidth = 120;
-            const double nodeHeight = 50;
 
             // Create variables for each input parameter
             foreach (var input in inputs)

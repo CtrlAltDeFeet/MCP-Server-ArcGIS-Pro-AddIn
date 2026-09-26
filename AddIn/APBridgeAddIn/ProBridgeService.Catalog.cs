@@ -31,7 +31,7 @@ namespace APBridgeAddIn
                 return new(false, $"Geodatabase not found: {gdbPath}", null);
 
             var resolvedPath = gdbPath!;
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 using var gdb = new Geodatabase(
                     new FileGeodatabaseConnectionPath(new Uri(resolvedPath)));
@@ -85,14 +85,14 @@ namespace APBridgeAddIn
 
         /// <summary>
         /// pro.describeDataset — schema of a dataset by full path
-        /// (e.g. 'F:\proj\data.gdb\Wetlands'): fields, geometry, SR, row count.
+        /// (e.g. 'C:\Example\data.gdb\Wetlands'): fields, geometry, SR, row count.
         /// </summary>
         private static async Task<IpcResponse> HandleDescribeDataset(Dictionary<string, string>? args)
         {
             if (args == null ||
                 !args.TryGetValue("path", out string? path) ||
                 string.IsNullOrWhiteSpace(path))
-                return new(false, "arg 'path' required (e.g. 'F:/proj/data.gdb/Wetlands')", null);
+                return new(false, "arg 'path' required (e.g. 'C:/Example/data.gdb/Wetlands')", null);
 
             // Split <...>.gdb\<dataset> — the dataset may be nested under a
             // feature dataset; OpenDataset takes the bare name either way.
@@ -109,7 +109,7 @@ namespace APBridgeAddIn
             if (!Directory.Exists(gdbPath))
                 return new(false, $"Geodatabase not found: {gdbPath}", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 using var gdb = new Geodatabase(new FileGeodatabaseConnectionPath(new Uri(gdbPath)));
 

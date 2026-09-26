@@ -1,0 +1,7 @@
+{
+  "filesAndNestedMembersScanned": 210,
+  "findings": [],
+  "scope": "Clean source working tree (excluding inherited Git metadata) and runtime, including compiled bytes and nested add-in archive; UTF-8/ASCII and UTF-16 paths, local identities, SID and credential patterns.",
+  "retained": "Required public author/copyright credits, dependency notices, public upstream links, generic example paths and runtime-resolved installation paths.",
+  "notIncluded": "Personal client configuration, raw logs, project data, screenshots, debug profiles/symbols, and Git metadata are excluded from distribution archives."
+}

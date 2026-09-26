@@ -15,9 +15,7 @@ namespace APBridgeAddIn
     /// </summary>
     internal static class BridgeRegistry
     {
-        public static readonly string Dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ArcGisMcpBridge");
+        public static readonly string Dir = ArcGisBridge.BridgeProtocol.RegistryDirectory;
 
         private static readonly JsonSerializerOptions JsonOpts =
             new(JsonSerializerOptions.Default) { WriteIndented = true };
@@ -68,7 +66,9 @@ namespace APBridgeAddIn
 
         private static void Write(int pid, BridgeEntry entry)
         {
-            File.WriteAllText(FilePath(pid), JsonSerializer.Serialize(entry, JsonOpts));
+            var temporary = FilePath(pid) + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(entry, JsonOpts));
+            File.Move(temporary, FilePath(pid), true);
         }
 
         public class BridgeEntry

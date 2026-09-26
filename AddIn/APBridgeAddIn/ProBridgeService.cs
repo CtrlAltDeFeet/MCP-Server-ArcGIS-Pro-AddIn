@@ -28,148 +28,62 @@ namespace APBridgeAddIn
     // this dispatcher file stays navigable.
     internal partial class ProBridgeService : IDisposable
     {
-        private readonly string _pipeName;
-        private CancellationTokenSource _cts;
-        private Task _serverLoop;
-
-        /// <summary>The named pipe this instance listens on ("ArcGisProBridge_&lt;PID&gt;").</summary>
-        public string PipeName => _pipeName;
-
-        /// <summary>
-        /// Best-effort liveness signal for the ribbon status button: true once
-        /// Start() has launched the accept loop and that loop hasn't cancelled
-        /// or otherwise completed. RunAsync only exits via cancellation (it
-        /// swallows and retries transient pipe errors internally), so this
-        /// reads as false only after Dispose() or an unexpected loop crash —
-        /// not a live round-trip probe of the pipe itself.
-        /// </summary>
-        public bool IsRunning => _serverLoop != null && !_serverLoop.IsCompleted;
-
-        public ProBridgeService(string pipeName) => _pipeName = pipeName;
-
-        public void Start()
+        private readonly ArcGisBridge.BridgeServer<IpcRequest, IpcResponse> _server;
+        private readonly ArcGisBridge.BridgePolicy _policy;
+        private static readonly SemaphoreSlim OperationLane = new(1, 1);
+        public bool IsRunning => _server.IsRunning;
+        public ProBridgeService(string pipeName)
         {
-            _cts = new CancellationTokenSource();
-            _serverLoop = Task.Run(() => RunAsync(_cts.Token));
+            _policy = ArcGisBridge.BridgePolicy.Load();
+            _server = new(pipeName, DispatchAsync,
+                error => new IpcResponse(false, error, null));
         }
-
-        public void Dispose()
+        public void Start() => _server.Start();
+        public void Dispose() => _server.Dispose();
+        private async Task<IpcResponse> DispatchAsync(IpcRequest req, CancellationToken ct)
         {
-            try { _cts?.Cancel(); _serverLoop?.Wait(2000); } catch { }
-        }
-
-        /// <summary>
-        /// Accept loop. Spins up a fresh listener instance immediately after each
-        /// connection is accepted, and serves every accepted connection on its own
-        /// task. Concurrency matters even for a single MCP client: BridgeClient
-        /// opens one connection PER REQUEST, so with a single-instance server a
-        /// long-running op (multi-minute run_gp_tool) would leave no listener
-        /// behind — even pro.ping and pro.getRunStatus polls would burn their
-        /// connect timeout and fail until the long op finished. Actual ArcGIS Pro
-        /// work is still serialized by QueuedTask.Run on Pro's MCT; concurrency
-        /// here only overlaps IPC handling and pure file ops.
-        /// </summary>
-        private async Task RunAsync(CancellationToken ct)
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                NamedPipeServerStream? server = null;
-                try
-                {
-                    // CurrentUserOnly: restricts the pipe ACL to the user running
-                    // Pro. Without it the default DACL lets other local users
-                    // connect and drive geoprocessing as this user.
-                    server = new NamedPipeServerStream(_pipeName,
-                        PipeDirection.InOut,
-                        NamedPipeServerStream.MaxAllowedServerInstances,
-                        PipeTransmissionMode.Message,
-                        PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-                    await server.WaitForConnectionAsync(ct);
-
-                    var conn = server;
-                    server = null; // ownership transferred to the serving task
-                    _ = Task.Run(() => ServeConnectionAsync(conn, ct), CancellationToken.None);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    server?.Dispose();
-                    break; // Clean shutdown
-                }
-                catch (Exception)
-                {
-                    // Pipe broke or other transient error — restart the listener.
-                    // Small delay prevents tight spin if errors repeat.
-                    server?.Dispose();
-                    try { await Task.Delay(100, ct); } catch { break; }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Serves one accepted pipe connection: reads line-delimited JSON requests
-        /// until the client disconnects, dispatching each through HandleAsync.
-        /// Multiple instances of this method run concurrently (one per client
-        /// connection); QueuedTask serializes the actual Pro SDK work.
-        /// </summary>
-        private static async Task ServeConnectionAsync(NamedPipeServerStream server, CancellationToken ct)
-        {
+            if (!await OperationLane.WaitAsync(0, ct)) return new(false, "A previous operation is still running; wait before retrying.", null);
             try
             {
-                using var _ = server;
-                using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-                using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true)
-                    { AutoFlush = true };
-
-                while (server.IsConnected && !ct.IsCancellationRequested)
+                if (req == null) return new(false, "Empty request.", null);
+                req = req with { Args = req.Args == null ? new() : new(req.Args) };
+                ActiveRequestProject.Value = req.ProjectPath;
+                _policy.Authorize(req.Op, req.Args);
+                if (ArcGisBridge.OperationCatalog.Capabilities[req.Op] == "Export") Directory.CreateDirectory(_policy.OutputRoot);
+                ct.ThrowIfCancellationRequested();
+                await CheckedRun(() =>
                 {
-                    var line = await reader.ReadLineAsync();
-                    if (line == null) break;
-
-                    IpcRequest req;
-                    try
-                    {
-                        req = JsonSerializer.Deserialize<IpcRequest>(line);
-                    }
-                    catch (Exception ex)
-                    {
-                        await SendAsync(writer, new IpcResponse(false, $"parse:{ex.Message}", null));
-                        continue;
-                    }
-
-                    try
-                    {
-                        var resp = await HandleAsync(req, ct);
-                        if (!resp.Ok)
-                            LogNonSuccess(req, resp.Error);
-                        await SendAsync(writer, resp);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogException(req, ex);
-                        await SendAsync(writer, new IpcResponse(false,
-                            $"{ex.GetType().Name}: {ex.Message ?? "<no message>"}", null));
-                    }
-                }
+                    ArcGisBridge.ProjectRouting.RequireSameProject(req.ProjectPath, Project.Current?.URI);
+                    ValidateNamedTargets(req);
+                });
+                // A background model retains exclusive access to the GIS operation lane.
+                if (_runJobs.Values.Any(j => { lock (j.Lock) return j.Status == "running"; }) && req.Op != "pro.getRunStatus")
+                    return new(false, "A model is running; use get_run_status and wait before another GIS operation.", null);
+                var response = await HandleAsync(req, ct);
+                if (!response.Ok) LogNonSuccess(req, response.Error);
+                return response;
             }
-            catch
+            catch (Exception ex)
             {
-                // Connection-level failure (client vanished mid-write, pipe broke).
-                // The accept loop keeps listening; nothing to do here.
+                return new(false, ex.Message, null);
             }
+            finally { ActiveRequestProject.Value = null; OperationLane.Release(); }
         }
 
-        // AllowNamedFloatingPointLiterals is important because ArcGIS Pro SDK
-        // occasionally returns NaN / ±Infinity in double-valued properties
-        // (Camera.Pitch in 2D mode, Envelope dimensions on uninitialized views).
-        // Default STJ throws ArgumentException; named-literals serializes as
-        // "NaN" / "Infinity" strings so the bridge can still return a response.
-        private static readonly JsonSerializerOptions _sendOpts = new()
+        private static void ValidateNamedTargets(IpcRequest req)
         {
-            NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
-        };
-
-        private static Task SendAsync(StreamWriter w, IpcResponse resp)
-            => w.WriteLineAsync(JsonSerializer.Serialize(resp, _sendOpts));
+            // Resolve ambiguity before any SDK mutation, including legacy handlers
+            // that still perform their own FirstOrDefault lookup afterward.
+            if (req.Args == null) return;
+            if (!req.Args.ContainsKey("layer") && !req.Args.ContainsKey("selectFeatures")) return;
+            req.Args.TryGetValue("map", out var requestedMap);
+            var map = ResolveMap(requestedMap);
+            foreach (var key in new[] { "layer", "selectFeatures" })
+                if (req.Args.TryGetValue(key, out var name) && !string.IsNullOrWhiteSpace(name))
+                    ArcGisBridge.ProjectRouting.RequireUniqueName(
+                        map.GetLayersAsFlattenedList().Select(l => l.Name)
+                           .Concat(map.StandaloneTables.Select(t => t.Name)), name, "layer/table");
+        }
 
         /// <summary>
         /// Main dispatcher: routes <see cref="IpcRequest.Op"/> strings to per-op handlers.
@@ -177,7 +91,7 @@ namespace APBridgeAddIn
         /// method is intentionally thin so each case is one line of routing. New ops:
         /// add a case here AND a wrapper in <c>McpServer/ArcGisMcpServer/Tools/ProTools.cs</c>.
         /// </summary>
-        private static async Task<IpcResponse> HandleAsync(IpcRequest req, CancellationToken ct)
+        private async Task<IpcResponse> HandleAsync(IpcRequest req, CancellationToken ct)
         {
             switch (req.Op)
             {
@@ -191,7 +105,7 @@ namespace APBridgeAddIn
                     string? mapName = null;
                     req.Args?.TryGetValue("map", out mapName);
 
-                    var allNames = await QueuedTask.Run(() =>
+                    var allNames = await CheckedRun(() =>
                     {
                         var map = ResolveMap(mapName);
                         var names = new List<string>();
@@ -213,7 +127,7 @@ namespace APBridgeAddIn
                         return new(false, "arg 'layer' required", null);
                     req.Args.TryGetValue("map", out string? mapName);
 
-                    int count = await QueuedTask.Run(() =>
+                    int count = await CheckedRun(() =>
                     {
                         var map = ResolveMap(mapName);
                         var member = RequireMapMember(map, layerName);
@@ -236,14 +150,14 @@ namespace APBridgeAddIn
                         string.IsNullOrWhiteSpace(layerName))
                         return new(false, "arg 'layer' required", null);
 
-                    await QueuedTask.Run(async () =>
+                    await CheckedRun(async () =>
                     {
                         var map = MapView.Active?.Map
                             ?? throw new InvalidOperationException("No active map view");
                         // Any layer type zooms (raster, group, service...) — not
                         // just FeatureLayer; ZoomToAsync accepts the Layer base.
                         var target = map.GetLayersAsFlattenedList()
-                            .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
+                            .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidOperationException(
                                 $"Layer not found: {layerName}. Available: " +
                                 string.Join(", ", map.GetLayersAsFlattenedList().Select(l => l.Name)));
@@ -262,7 +176,7 @@ namespace APBridgeAddIn
                         return new(false, "args 'layer' & 'where' required", null);
                     req.Args.TryGetValue("map", out string? sbaMapName);
 
-                    var selectionInfo = await QueuedTask.Run<object>(() =>
+                    var selectionInfo = await CheckedRun<object>(() =>
                     {
                         var map = ResolveMap(sbaMapName);
                         var member = RequireMapMember(map, layerName);
@@ -290,7 +204,7 @@ namespace APBridgeAddIn
                         return new(false, "arg 'layer' required", null);
                     req.Args.TryGetValue("map", out string? lfMapName);
 
-                    var data = await QueuedTask.Run<object>(() =>
+                    var data = await CheckedRun<object>(() =>
                     {
                         var map = ResolveMap(lfMapName);
                         var member = RequireMapMember(map, lfLayerName);
@@ -326,7 +240,7 @@ namespace APBridgeAddIn
                         return new(false, "arg 'layer' required", null);
                     req.Args.TryGetValue("map", out string? lpMapName);
 
-                    var data = await QueuedTask.Run<object>(() =>
+                    var data = await CheckedRun<object>(() =>
                     {
                         var map = ResolveMap(lpMapName);
                         var member = RequireMapMember(map, lpLayerName);
@@ -439,7 +353,7 @@ namespace APBridgeAddIn
                         ? null
                         : fieldsStr.Split(',').Select(f => f.Trim()).Where(f => f.Length > 0).ToList();
 
-                    var data = await QueuedTask.Run<object>(() =>
+                    var data = await CheckedRun<object>(() =>
                     {
                         var map = ResolveMap(raMapName);
                         var member = RequireMapMember(map, raLayerName);
@@ -546,7 +460,7 @@ namespace APBridgeAddIn
                         ? null
                         : gsfFieldsStr.Split(',').Select(f => f.Trim()).Where(f => f.Length > 0).ToList();
 
-                    var data = await QueuedTask.Run<object>(() =>
+                    var data = await CheckedRun<object>(() =>
                     {
                         var map = ResolveMap(gsfMapName);
                         var member = RequireMapMember(map, gsfLayerName);
@@ -655,12 +569,12 @@ namespace APBridgeAddIn
 
                     // Search Map.Layers (not OfType<FeatureLayer>) so we can
                     // remove any layer type — raster, web, group, basemap, etc.
-                    var result = await QueuedTask.Run<object?>(() =>
+                    var result = await CheckedRun<object?>(() =>
                     {
                         var map = MapView.Active?.Map;
                         if (map == null) return null;
                         var layer = map.GetLayersAsFlattenedList()
-                            .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                            .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                         if (layer == null) return null;
                         var actualName = layer.Name;
                         map.RemoveLayer(layer);
@@ -681,12 +595,12 @@ namespace APBridgeAddIn
                         string.IsNullOrWhiteSpace(newName))
                         return new(false, "args 'layer' and 'newName' required", null);
 
-                    var result = await QueuedTask.Run<object?>(() =>
+                    var result = await CheckedRun<object?>(() =>
                     {
                         var map = MapView.Active?.Map;
                         if (map == null) return null;
                         var layer = map.GetLayersAsFlattenedList()
-                            .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                            .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                         if (layer == null) return null;
                         var oldName = layer.Name;
                         layer.SetName(newName);
@@ -710,12 +624,12 @@ namespace APBridgeAddIn
                     if (!bool.TryParse(visStr, out bool visible))
                         return new(false, $"arg 'visible' must be 'true' or 'false', got '{visStr}'", null);
 
-                    var result = await QueuedTask.Run<object?>(() =>
+                    var result = await CheckedRun<object?>(() =>
                     {
                         var map = MapView.Active?.Map;
                         if (map == null) return null;
                         var layer = map.GetLayersAsFlattenedList()
-                            .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                            .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                         if (layer == null) return null;
                         layer.SetVisibility(visible);
                         return (object)new { layer = layer.Name, visible };
@@ -736,7 +650,7 @@ namespace APBridgeAddIn
                     if (!int.TryParse(posStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int position))
                         return new(false, $"arg 'position' must be an integer, got '{posStr}'", null);
 
-                    var result = await QueuedTask.Run<object?>(() =>
+                    var result = await CheckedRun<object?>(() =>
                     {
                         var map = MapView.Active?.Map;
                         if (map == null) return null;
@@ -746,7 +660,7 @@ namespace APBridgeAddIn
                         // rather than the flattened tree the other handlers use.
                         var topLayers = map.Layers;
                         var layer = topLayers
-                            .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                            .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                         if (layer == null) return null;
                         // 0 = topmost. Clamp out-of-range silently rather than erroring;
                         // an LLM saying "move it to the top" might pass 0 reliably but
@@ -875,13 +789,13 @@ namespace APBridgeAddIn
                     var apfAddedOids = new List<long>();
                     string apfActualName = string.Empty;
 
-                    await QueuedTask.Run(async () =>
+                    await CheckedRun(async () =>
                     {
                         var map = MapView.Active?.Map
                             ?? throw new InvalidOperationException("No active map");
                         var fl = map.GetLayersAsFlattenedList()
                             .OfType<FeatureLayer>()
-                            .FirstOrDefault(l => l.Name.Equals(apfLayerName, StringComparison.OrdinalIgnoreCase))
+                            .SingleOrDefault(l => l.Name.Equals(apfLayerName, StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidOperationException($"Layer not found: {apfLayerName}");
                         apfActualName = fl.Name;
 
@@ -978,13 +892,13 @@ namespace APBridgeAddIn
                     var apgAddedOids = new List<long>();
                     string apgActualName = string.Empty;
 
-                    await QueuedTask.Run(async () =>
+                    await CheckedRun(async () =>
                     {
                         var map = MapView.Active?.Map
                             ?? throw new InvalidOperationException("No active map");
                         var fl = map.GetLayersAsFlattenedList()
                             .OfType<FeatureLayer>()
-                            .FirstOrDefault(l => l.Name.Equals(apgLayerName, StringComparison.OrdinalIgnoreCase))
+                            .SingleOrDefault(l => l.Name.Equals(apgLayerName, StringComparison.OrdinalIgnoreCase))
                             ?? throw new InvalidOperationException($"Layer not found: {apgLayerName}");
                         apgActualName = fl.Name;
 
@@ -1208,7 +1122,7 @@ namespace APBridgeAddIn
                 ?? throw new InvalidOperationException("No project currently open in ArcGIS Pro");
             var available = project.GetItems<MapProjectItem>().ToList();
             var mapItem = available
-                .FirstOrDefault(m => m.Name.Equals(mapName, StringComparison.OrdinalIgnoreCase))
+                .SingleOrDefault(m => m.Name.Equals(mapName, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException(
                     $"Map not found: {mapName}. Available maps: {string.Join(", ", available.Select(m => m.Name))}");
             return mapItem.GetMap();
@@ -1242,17 +1156,10 @@ namespace APBridgeAddIn
         private static ArcGIS.Desktop.Mapping.MapMember? FindMapMemberByName(
             ArcGIS.Desktop.Mapping.Map map, string name)
         {
-            foreach (var layer in map.GetLayersAsFlattenedList())
-            {
-                if (layer.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    return layer;
-            }
-            foreach (var table in map.StandaloneTables)
-            {
-                if (table.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                    return table;
-            }
-            return null;
+            var matches = map.GetLayersAsFlattenedList().Cast<ArcGIS.Desktop.Mapping.MapMember>()
+                .Concat(map.StandaloneTables).Where(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length > 1) throw new InvalidOperationException($"Ambiguous layer/table '{name}'; rename duplicates in Pro.");
+            return matches.SingleOrDefault();
         }
 
         /// <summary>
@@ -1342,7 +1249,7 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleGetCurrentExtent()
         {
-            var extent = await QueuedTask.Run<object?>(() =>
+            var extent = await CheckedRun<object?>(() =>
             {
                 var view = MapView.Active;
                 var ext = view?.Extent;
@@ -1400,7 +1307,7 @@ namespace APBridgeAddIn
         /// </summary>
         private static async Task<IpcResponse> HandleGetViewDiagnostics()
         {
-            var diag = await QueuedTask.Run<object?>(() =>
+            var diag = await CheckedRun<object?>(() =>
             {
                 var view = MapView.Active;
                 if (view == null) return null;
@@ -1475,7 +1382,7 @@ namespace APBridgeAddIn
             args?.TryGetValue("layer", out layerName);
             args?.TryGetValue("map", out mapName);
 
-            var result = await QueuedTask.Run<(bool ok, string? error, int cleared, string? layerCleared)>(() =>
+            var result = await CheckedRun<(bool ok, string? error, int cleared, string? layerCleared)>(() =>
             {
                 ArcGIS.Desktop.Mapping.Map map;
                 try { map = ResolveMap(mapName); }
@@ -1525,9 +1432,9 @@ namespace APBridgeAddIn
         /// use this for orientation before operations that depend on project context
         /// (e.g., "am I in the right project? what's the map's SR?").
         /// </summary>
-        private static async Task<IpcResponse> HandleGetProjectInfo()
+        private async Task<IpcResponse> HandleGetProjectInfo()
         {
-            var info = await QueuedTask.Run<object?>(() =>
+            var info = await CheckedRun<object?>(() =>
             {
                 var proj = Project.Current;
                 if (proj == null) return null;
@@ -1554,7 +1461,9 @@ namespace APBridgeAddIn
                     mapCount = proj.GetItems<MapProjectItem>().Count(),
                     layoutCount = proj.GetItems<LayoutProjectItem>().Count(),
                     toolboxCount = proj.GetItems<GeoprocessingProjectItem>().Count(),
-                    activeMap
+                    activeMap,
+                    bridgePolicy = new { enabled = _policy.Capabilities, outputRoot = _policy.OutputRoot,
+                        policyPath = ArcGisBridge.BridgePolicy.PolicyPath }
                 };
             });
 
@@ -1571,7 +1480,7 @@ namespace APBridgeAddIn
         /// </summary>
         private static async Task<IpcResponse> HandleListMaps()
         {
-            var maps = await QueuedTask.Run(() =>
+            var maps = await CheckedRun(() =>
                 Project.Current?.GetItems<MapProjectItem>()
                     .Select(i => new Dictionary<string, string>
                     {
@@ -1633,10 +1542,10 @@ namespace APBridgeAddIn
             args.TryGetValue("where", out string? where);
 
             // Resolve the layer so we return a clear error before invoking GP.
-            var resolved = await QueuedTask.Run(() =>
+            var resolved = await CheckedRun(() =>
                 MapView.Active?.Map?.GetLayersAsFlattenedList()
                     .OfType<FeatureLayer>()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
+                    .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase))
                     ?.Name);
             if (resolved == null)
                 return new(false, $"Layer not found in active map: {layerName}", null);
@@ -1646,7 +1555,7 @@ namespace APBridgeAddIn
                 : Geoprocessing.MakeValueArray(resolved, output, where);
 
             var result = await Geoprocessing.ExecuteToolAsync(
-                "conversion.ExportFeatures", valueArray, DefaultRunEnvironments());
+                "conversion.ExportFeatures", valueArray, Geoprocessing.MakeEnvironmentArray(overwriteoutput: false));
 
             if (result.IsFailed)
             {
@@ -1684,6 +1593,23 @@ namespace APBridgeAddIn
             bool overwrite = args.TryGetValue("overwrite", out string? ow)
                              && bool.TryParse(ow, out var b) && b;
 
+            // Pro silently falls back to its default project directory when the
+            // requested location does not exist. Validate and create it first.
+            if (!Path.IsPathFullyQualified(location) || location.StartsWith("\\\\"))
+                return new(false, "location must be an absolute local directory", null);
+            if (name is "." or ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                name.EndsWith(' ') || name.EndsWith('.'))
+                return new(false, "name must be a single valid project folder name", null);
+            location = Path.GetFullPath(location);
+            var targetDirectory = Path.Combine(location, name);
+            if (Directory.Exists(targetDirectory) && !overwrite)
+                return new(false, "Project directory already exists; choose a new name or explicitly request overwrite", null);
+            if (Project.Current != null &&
+                string.Equals(Path.GetFullPath(Project.Current.HomeFolderPath).TrimEnd('\\', '/'),
+                    targetDirectory.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                return new(false, "Cannot replace the currently open project's directory", null);
+            Directory.CreateDirectory(location);
+
             // Same GUI-thread requirement as the explicit pro.saveProject path.
             // Without the Dispatcher wrap this silently throws and the catch
             // swallows it, meaning save-first never actually fired and Pro's
@@ -1698,7 +1624,7 @@ namespace APBridgeAddIn
                     await saveTask;
                 }
             }
-            catch { }
+            catch (Exception ex) { return new(false, $"Cannot save current project before switching: {ex.Message}", null); }
 
             if (overwrite)
             {
@@ -1749,7 +1675,7 @@ namespace APBridgeAddIn
         /// <summary>
         /// Opens an existing .aprx. Same WPF-Dispatcher + nested-Task-unwrap pattern as
         /// <see cref="HandleCreateProject"/> — <c>Project.OpenAsync</c> requires the GUI
-        /// thread, not the MCT, so QueuedTask.Run alone is insufficient. Saves the
+        /// thread, not the MCT, so CheckedRun alone is insufficient. Saves the
         /// current project first to suppress the modal "save changes?" dialog.
         /// </summary>
         private static async Task<IpcResponse> HandleOpenProject(Dictionary<string, string>? args)
@@ -1776,7 +1702,7 @@ namespace APBridgeAddIn
                     await saveTask;
                 }
             }
-            catch { }
+            catch (Exception ex) { return new(false, $"Cannot save current project before switching: {ex.Message}", null); }
 
             var projectTask = await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                 () => Project.OpenAsync(path));
@@ -1809,7 +1735,7 @@ namespace APBridgeAddIn
             args.TryGetValue("name", out string? layerName);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 ArcGIS.Desktop.Mapping.Map map;
                 try { map = ResolveMap(mapName); }
@@ -1852,14 +1778,14 @@ namespace APBridgeAddIn
             args.TryGetValue("name", out string? layerName);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 ArcGIS.Desktop.Mapping.Map map;
                 try { map = ResolveMap(mapName); }
                 catch (InvalidOperationException ex) { return new(false, ex.Message, null); }
 
                 Uri uri;
-                try { uri = new Uri(path); }
+                try { uri = new Uri(Path.GetFullPath(path)); }
                 catch (Exception ex) { return new(false, $"Invalid path (cannot build URI): {ex.Message}", null); }
 
                 try
@@ -1892,7 +1818,7 @@ namespace APBridgeAddIn
 
         private static async Task<IpcResponse> HandleListLayouts()
         {
-            var layouts = await QueuedTask.Run(() =>
+            var layouts = await CheckedRun(() =>
                 Project.Current?.GetItems<LayoutProjectItem>()
                     .Select(i => new Dictionary<string, string>
                     {
@@ -1935,7 +1861,7 @@ namespace APBridgeAddIn
             if (orientation == "portrait" && width > height) (width, height) = (height, width);
             else if (orientation == "landscape" && height > width) (width, height) = (height, width);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 try
                 {
@@ -1979,16 +1905,16 @@ namespace APBridgeAddIn
             if (args.TryGetValue("widthInches", out string? ws) && double.TryParse(ws, NumberStyles.Float, CultureInfo.InvariantCulture, out var wd) && wd > 0) w = wd;
             if (args.TryGetValue("heightInches", out string? hs) && double.TryParse(hs, NumberStyles.Float, CultureInfo.InvariantCulture, out var hd) && hd > 0) h = hd;
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var layoutItem = Project.Current?.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
                 if (layoutItem == null) return new(false, $"Layout not found: {layoutName}", null);
                 var layout = layoutItem.GetLayout();
                 if (layout == null) return new(false, $"Could not load layout: {layoutName}", null);
 
                 var mapItem = Project.Current?.GetItems<MapProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(mapName, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(mapName, StringComparison.OrdinalIgnoreCase));
                 if (mapItem == null) return new(false, $"Map not found: {mapName}", null);
                 var map = mapItem.GetMap();
                 if (map == null) return new(false, $"Could not load map: {mapName}", null);
@@ -2031,7 +1957,7 @@ namespace APBridgeAddIn
 
         /// <summary>
         /// Opens a layout in a new pane. Layout-item lookup runs on the MCT via
-        /// QueuedTask.Run, but pane creation (<c>FrameworkApplication.Panes.Create
+        /// CheckedRun, but pane creation (<c>FrameworkApplication.Panes.Create
         /// LayoutPaneAsync</c>) is GUI-thread-only — invoked via the WPF Dispatcher.
         /// Mixing the two thread contexts in one method is the F3 fix pattern.
         /// </summary>
@@ -2042,10 +1968,10 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(name))
                 return new(false, "arg 'name' required", null);
 
-            var getResult = await QueuedTask.Run(() =>
+            var getResult = await CheckedRun(() =>
             {
                 var item = Project.Current?.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (item == null) return (ok: false, err: $"Layout not found: {name}", layout: (Layout?)null);
                 var layout = item.GetLayout();
                 if (layout == null) return (ok: false, err: $"Could not load layout: {name}", layout: (Layout?)null);
@@ -2086,10 +2012,10 @@ namespace APBridgeAddIn
                 string.IsNullOrWhiteSpace(name))
                 return new(false, "arg 'name' required", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var item = Project.Current?.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (item == null) return new(false, $"Layout not found: {name}", null);
                 var layout = item.GetLayout();
                 if (layout == null) return new(false, $"Could not load layout: {name}", null);
@@ -2126,16 +2052,16 @@ namespace APBridgeAddIn
                 !args.TryGetValue("text", out string? text))
                 return new(false, "args 'layoutName', 'elementName' & 'text' required", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var item = Project.Current?.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(layoutName, StringComparison.OrdinalIgnoreCase));
                 if (item == null) return new(false, $"Layout not found: {layoutName}", null);
                 var layout = item.GetLayout();
                 if (layout == null) return new(false, $"Could not load layout: {layoutName}", null);
 
                 var element = layout.GetElements()
-                    .FirstOrDefault(e => e.Name.Equals(elementName, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(e => e.Name.Equals(elementName, StringComparison.OrdinalIgnoreCase));
                 if (element == null)
                     return new(false, $"Element not found on layout '{layoutName}': {elementName}", null);
                 if (element is not TextElement te)
@@ -2170,10 +2096,10 @@ namespace APBridgeAddIn
                 int.TryParse(res, NumberStyles.Integer, CultureInfo.InvariantCulture, out var r) && r > 0)
                 resolution = r;
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var item = Project.Current?.GetItems<LayoutProjectItem>()
-                    .FirstOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (item == null) return new(false, $"Layout not found: {name}", null);
                 var layout = item.GetLayout();
                 if (layout == null) return new(false, $"Could not load layout: {name}", null);
@@ -2225,7 +2151,7 @@ namespace APBridgeAddIn
             if (Project.Current == null)
                 return new(false, "No project currently open in ArcGIS Pro", null);
 
-            var toolboxes = await QueuedTask.Run(() =>
+            var toolboxes = await CheckedRun(() =>
             {
                 var items = Project.Current?.GetItems<GeoprocessingProjectItem>()
                     ?? Enumerable.Empty<GeoprocessingProjectItem>();
@@ -2284,7 +2210,7 @@ namespace APBridgeAddIn
             }
             else
             {
-                var projectHome = await QueuedTask.Run(() => Project.Current.HomeFolderPath);
+                var projectHome = await CheckedRun(() => Project.Current.HomeFolderPath);
                 path = Path.Combine(projectHome, $"{tbxName}.atbx");
             }
 
@@ -2304,7 +2230,7 @@ namespace APBridgeAddIn
             }
 
             // Add to project
-            await QueuedTask.Run(() =>
+            await CheckedRun(() =>
             {
                 try { Project.Current.AddItem(ItemFactory.Instance.Create(path) as IProjectItem); }
                 catch { /* May fail if already added */ }
@@ -2480,6 +2406,8 @@ namespace APBridgeAddIn
                     _runJobs.TryRemove(kv.Key, out _);
             }
 
+            foreach (var old in _runJobs.Values.Where(j => j.Status != "running").OrderBy(j => j.StartedUtc).Take(Math.Max(0, _runJobs.Count - 31)).ToArray())
+                _runJobs.TryRemove(old.JobId, out _);
             var job = new RunJob
             {
                 JobId = Guid.NewGuid().ToString("N").Substring(0, 12),
@@ -2701,7 +2629,7 @@ namespace APBridgeAddIn
             // Optional variable overrides: like 'parameters' but applies to ANY
             // model variable by name, not just exposed parameters. The repair
             // lever for models authored against project map layers — an agent
-            // can resolve bare layer names ("Farmland_CVWD_HUC8") to dataset
+            // can resolve bare layer names ("ExampleFeatures") to dataset
             // paths and run the model without that project/map being open.
             Dictionary<string, string>? varOverrides = null;
             if (args.TryGetValue("variableOverrides", out string? ovJson) && !string.IsNullOrWhiteSpace(ovJson))
@@ -3811,7 +3739,7 @@ except Exception:
                 }
             }
             catch { /* fall through to the default install path */ }
-            var fallback = @"C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat";
+            var fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ArcGIS", "Pro", "bin", "Python", "Scripts", "propy.bat");
             return File.Exists(fallback) ? fallback : null;
         }
 
@@ -4198,10 +4126,7 @@ except Exception:
                 catch { dir = Path.GetTempPath(); }
 
                 var logPath = Path.Combine(dir, "mcp-bridge.log");
-                var argsPreview = req.Args == null
-                    ? "<none>"
-                    : string.Join(", ", req.Args.Select(kv =>
-                        $"{kv.Key}={Truncate(kv.Value, 200)}"));
+                var argsPreview = "<redacted>";
 
                 var entry = $"[{DateTime.UtcNow:O}] op={req.Op} args=[{argsPreview}]\n{ex}\n\n";
                 File.AppendAllText(logPath, entry);
@@ -4223,10 +4148,7 @@ except Exception:
                 catch { dir = Path.GetTempPath(); }
 
                 var logPath = Path.Combine(dir, "mcp-bridge.log");
-                var argsPreview = req.Args == null
-                    ? "<none>"
-                    : string.Join(", ", req.Args.Select(kv =>
-                        $"{kv.Key}={Truncate(kv.Value, 200)}"));
+                var argsPreview = "<redacted>";
 
                 var entry = $"[{DateTime.UtcNow:O}] op={req.Op} args=[{argsPreview}] RESPONSE_NOT_OK error={Truncate(error, 500)}\n\n";
                 File.AppendAllText(logPath, entry);

@@ -10,7 +10,7 @@ namespace ArcGisMcpServer.Tools
     // generic WithTools<T>() registration can take it as a type argument —
     // that overload is trim-safe; WithToolsFromAssembly() is not.
     [McpServerToolType]
-    public class ProTools
+    public partial class ProTools
     {
         private static BridgeClient? _client;
         public static void Configure(BridgeClient client) => _client = client;
@@ -25,15 +25,14 @@ namespace ArcGisMcpServer.Tools
         // Returning FormatResult(r, op) matches the pattern used by the other
         // tools and keeps error text visible to the model.
 
-        [McpServerTool, Description("Name of the active map in ArcGIS Pro")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Name of the active map in ArcGIS Pro")]
         public static async Task<string> GetActiveMapName()
         {
             var r = await _client!.OpAsync("pro.getActiveMapName");
             return FormatResult(r, "pro.getActiveMapName");
         }
 
-        [McpServerTool, Description(
-            "List all maps in the current project (name + item path). " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List all maps in the current project (name + item path). " +
             "Use this to enumerate maps before operations that take a map name " +
             "(e.g., add_map_frame_to_layout).")]
         public static async Task<string> ListMaps()
@@ -42,8 +41,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listMaps");
         }
 
-        [McpServerTool, Description(
-            "List names of layers AND standalone tables in a map. Returns a flat " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List names of layers AND standalone tables in a map. Returns a flat " +
             "JSON array of names including spatial layers (nested via group layers " +
             "appear inline with their parents in TOC order) AND non-spatial " +
             "standalone tables. Use get_layer_properties on a returned name to " +
@@ -58,8 +56,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listLayers");
         }
 
-        [McpServerTool, Description(
-            "Count features (or rows, for standalone tables) in a layer or " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Count features (or rows, for standalone tables) in a layer or " +
             "standalone table by name. Searches the active map by default; " +
             "specify 'map' to target a different map in the project.")]
         public static async Task<string> CountFeatures(
@@ -72,15 +69,14 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.countFeatures");
         }
 
-        [McpServerTool, Description("Zoom to a layer's extent by name")]
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Zoom to a layer's extent by name")]
         public static async Task<string> ZoomToLayer(string layer)
         {
             var r = await _client!.OpAsync("pro.zoomToLayer", new() { ["layer"] = layer });
             return FormatResult(r, "pro.zoomToLayer");
         }
 
-        [McpServerTool, Description(
-            "Select features in a layer using a SQL WHERE clause. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Select features in a layer using a SQL WHERE clause. " +
             "Returns the number of selected features. " +
             "Example where clauses: \"POP > 1000\", \"NAME = 'Seattle'\", \"STATE IN ('WA','OR')\".")]
         public static async Task<string> SelectByAttribute(
@@ -98,8 +94,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.selectByAttribute");
         }
 
-        [McpServerTool, Description(
-            "List the field schema of a feature layer or standalone table: name, " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List the field schema of a feature layer or standalone table: name, " +
             "alias, type, length, isNullable, isEditable for each field. Use before " +
             "select_by_attribute, read_layer_attributes, or run_gp_tool calls that " +
             "take field names so the agent can verify fields exist and check types " +
@@ -116,8 +111,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listFields");
         }
 
-        [McpServerTool, Description(
-            "Get general properties of a layer or standalone table. For layers: type " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get general properties of a layer or standalone table. For layers: type " +
             "(FeatureLayer, RasterLayer, etc.), data source path, spatial reference " +
             "(wkid + name), extent, visibility, feature count, geometry type. For " +
             "standalone tables: type (StandaloneTable), data source path, row count " +
@@ -134,8 +128,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getLayerProperties");
         }
 
-        [McpServerTool, Description(
-            "Read feature attribute values from a layer in the active map. Returns " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Read feature attribute values from a layer in the active map. Returns " +
             "JSON with field names and up to 'limit' rows. Geometry/Shape/Blob/Raster " +
             "fields are excluded from output. Useful for surfacing attribute data in " +
             "chat replies — e.g., turn-by-turn directions from a Network Analyst " +
@@ -161,8 +154,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.readLayerAttributes");
         }
 
-        [McpServerTool, Description(
-            "Read attribute values from the layer's currently-selected features. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Read attribute values from the layer's currently-selected features. " +
             "Useful after select_by_attribute to inspect exactly which features matched " +
             "the WHERE clause, or to read attributes of features the user selected " +
             "interactively in Pro. Returns the same JSON shape as read_layer_attributes " +
@@ -182,8 +174,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getSelectedFeatures");
         }
 
-        [McpServerTool, Description(
-            "Clear feature selections in the active map. If 'layer' is specified, " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Clear feature selections in the active map. If 'layer' is specified, " +
             "clears selection only on that layer (errors if the layer is not found). " +
             "If omitted, clears selections across every feature layer in the active map. " +
             "Useful as a pre-op reset — leftover selections silently restrict geoprocessing " +
@@ -200,8 +191,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.clearSelection");
         }
 
-        [McpServerTool, Description(
-            "Remove a layer from the active map's Table of Contents by name. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Remove a layer from the active map's Table of Contents by name. " +
             "Removes the TOC reference only — the underlying feature class, raster, " +
             "or service is NOT deleted from disk. To delete data, use run_gp_tool " +
             "with management.Delete instead.")]
@@ -212,8 +202,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.removeLayer");
         }
 
-        [McpServerTool, Description(
-            "Rename a layer in the active map. If the new name conflicts with an " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Rename a layer in the active map. If the new name conflicts with an " +
             "existing layer, ArcGIS Pro may auto-uniquify (e.g., 'Foo' becomes " +
             "'Foo (2)') — the returned 'to' value reflects the actual post-rename name.")]
         public static async Task<string> RenameLayer(
@@ -228,8 +217,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.renameLayer");
         }
 
-        [McpServerTool, Description(
-            "Show or hide a layer in the active map without removing it from the TOC. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Show or hide a layer in the active map without removing it from the TOC. " +
             "Useful when staging a map for export: hide reference layers, show analysis " +
             "outputs, export, then restore.")]
         public static async Task<string> SetLayerVisibility(
@@ -244,8 +232,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setLayerVisibility");
         }
 
-        [McpServerTool, Description(
-            "Move a layer to a new position in the active map's Table of Contents. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Move a layer to a new position in the active map's Table of Contents. " +
             "Position is 0-based: 0 is topmost, higher numbers are below. " +
             "Out-of-range values are clamped silently to the valid range. " +
             "Operates on top-level layers only; nested layers inside group layers " +
@@ -262,8 +249,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.moveLayer");
         }
 
-        [McpServerTool, Description(
-            "Get the current extent (viewport) of the active map view. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get the current extent (viewport) of the active map view. " +
             "Returns xmin/ymin/xmax/ymax, width/height, and the spatial reference WKID.")]
         public static async Task<string> GetCurrentExtent()
         {
@@ -271,8 +257,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getCurrentExtent");
         }
 
-        [McpServerTool, Description(
-            "Diagnostic: returns raw Map.SpatialReference, Extent.SpatialReference, " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Diagnostic: returns raw Map.SpatialReference, Extent.SpatialReference, " +
             "Camera (X/Y/Z/Scale/Heading/Pitch/Roll), and Map.CalculateFullExtent(). " +
             "Use this when get_current_extent returns values that don't match the " +
             "reported SR, or when an agent needs to introspect 2D-vs-3D view state. " +
@@ -284,8 +269,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getViewDiagnostics");
         }
 
-        [McpServerTool, Description(
-            "Export a layer's features to a feature class or shapefile. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Export capability. Export a layer's features to a feature class or shapefile. " +
             "The output path determines the format: use a '.shp' extension for shapefile " +
             "output, otherwise provide a path inside a file/enterprise geodatabase " +
             "(e.g., 'C:/data/out.gdb/Buildings_Export'). An optional SQL WHERE clause " +
@@ -307,13 +291,13 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.exportLayer");
         }
 
-        [McpServerTool, Description("Ping test to validate the MCP server (without depending on ArcGIS Pro)")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Ping test to validate the MCP server (without depending on ArcGIS Pro)")]
         public static Task<string> Ping()
         {
             return Task.FromResult($"pong {DateTimeOffset.UtcNow:O}");
         }
 
-        [McpServerTool, Description("MCP echo test")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("MCP echo test")]
         public static string Echo(string text)
         {
             return $"echo: {text}";
@@ -321,8 +305,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Project Tools ───────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Get metadata about the currently open ArcGIS Pro project — name, aprx file " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get metadata about the currently open ArcGIS Pro project — name, aprx file " +
             "path, home folder, default geodatabase, default toolbox, counts of maps / " +
             "layouts / toolboxes, and active map info (name + spatial reference). " +
             "Useful for agents to orient themselves before operations that depend on " +
@@ -333,13 +316,12 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getProjectInfo");
         }
 
-        [McpServerTool, Description(
-            "Create a new ArcGIS Pro project. The current project is saved first " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Create a new ArcGIS Pro project. The current project is saved first " +
             "to avoid a modal 'save changes?' dialog that would hang the bridge. " +
             "Returns the new project's name and .aprx path.")]
         public static async Task<string> CreateProject(
             [Description("Project name (used to name the .aprx file and project folder)")] string name,
-            [Description("Folder path where the project folder will be created (e.g., 'F:/ArcGIS/Projects')")] string location,
+            [Description("Folder path where the project folder will be created (e.g., 'C:/Example/Projects')")] string location,
             [Description("Optional: path to a .aptx project template")] string? template = null,
             [Description("Optional: overwrite an existing project with the same name/location (default false)")] bool overwrite = false)
         {
@@ -355,8 +337,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.createProject");
         }
 
-        [McpServerTool, Description(
-            "Open an existing ArcGIS Pro project. The current project is saved first " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Open an existing ArcGIS Pro project. The current project is saved first " +
             "to avoid a modal dialog.")]
         public static async Task<string> OpenProject(
             [Description("Full path to the .aprx project file")] string path)
@@ -365,8 +346,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.openProject");
         }
 
-        [McpServerTool, Description(
-            "Explicitly save the currently-open project. Most project-lifecycle ops " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Explicitly save the currently-open project. Most project-lifecycle ops " +
             "save-first automatically, but this is useful as a pre-operation safety " +
             "rail or to persist a batch of edits the agent wants to commit to disk.")]
         public static async Task<string> SaveProject()
@@ -377,8 +357,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Layer Tools ─────────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Add a layer to the active map from a URL — typically an ArcGIS feature service " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a layer to the active map from a URL — typically an ArcGIS feature service " +
             "(e.g., 'https://services.arcgis.com/.../FeatureServer/0'). " +
             "Also accepts image services, tile services, WMS, and other Pro-supported URI sources.")]
         public static async Task<string> AddLayerFromUrl(
@@ -395,12 +374,11 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addLayerFromUrl");
         }
 
-        [McpServerTool, Description(
-            "Add a layer to the active map from a file-system path. Supports shapefiles " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a layer to the active map from a file-system path. Supports shapefiles " +
             "(path/to/file.shp), file-geodatabase feature classes (path/to/my.gdb/FeatureClass), " +
             "rasters, and any other path LayerFactory can resolve. For .gdb feature classes, " +
             "use a composite path where the .gdb folder is followed by the feature-class name " +
-            "(e.g., 'F:/projects/my.gdb/Roads').")]
+            "(e.g., 'C:/Example/data.gdb/Roads').")]
         public static async Task<string> AddLayerFromFile(
             [Description("Full file-system path to the data source")] string path,
             [Description("Optional: display name for the new layer in the TOC")] string? name = null,
@@ -417,15 +395,14 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Layout Tools ────────────────────────────────────────────────
 
-        [McpServerTool, Description("List all layouts in the current project (name + item path).")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List all layouts in the current project (name + item path).")]
         public static async Task<string> ListLayouts()
         {
             var r = await _client!.OpAsync("pro.listLayouts");
             return FormatResult(r, "pro.listLayouts");
         }
 
-        [McpServerTool, Description(
-            "Create a new blank layout. Defaults to letter-landscape (11x8.5 in). " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Create a new blank layout. Defaults to letter-landscape (11x8.5 in). " +
             "The layout is empty — use add_map_frame_to_layout to attach a map, and " +
             "add other elements before export. Use list_layouts to see result or " +
             "open_layout to view it in Pro.")]
@@ -443,8 +420,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.createLayout");
         }
 
-        [McpServerTool, Description(
-            "Add a map-frame element to an existing layout and bind it to a map. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a map-frame element to an existing layout and bind it to a map. " +
             "This is the step that makes a layout actually renderable — without a " +
             "map frame, create_layout's output is blank. Default placement is 1in " +
             "from top-left, sized 9x6.5in (fits letter-landscape with 1in margins).")]
@@ -469,8 +445,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addMapFrameToLayout");
         }
 
-        [McpServerTool, Description(
-            "Open a layout in a new layout view pane in ArcGIS Pro. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Open a layout in a new layout view pane in ArcGIS Pro. " +
             "Use list_layouts first to see available layout names.")]
         public static async Task<string> OpenLayout(
             [Description("Name of the layout to open")] string name)
@@ -479,8 +454,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.openLayout");
         }
 
-        [McpServerTool, Description(
-            "List all elements on a layout — titles, scale bars, legends, north arrows, map frames, etc. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List all elements on a layout — titles, scale bars, legends, north arrows, map frames, etc. " +
             "Returns element name, type, visibility, and (for text elements) a preview of the current text. " +
             "Use this before set_layout_text to discover the correct element name.")]
         public static async Task<string> ListLayoutElements(
@@ -490,8 +464,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listLayoutElements");
         }
 
-        [McpServerTool, Description(
-            "Set the text content of a text element on a layout (title, subtitle, notes, date stamp, etc.). " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Set the text content of a text element on a layout (title, subtitle, notes, date stamp, etc.). " +
             "Use list_layout_elements first to find the element's exact name.")]
         public static async Task<string> SetLayoutText(
             [Description("Name of the layout containing the element")] string layoutName,
@@ -507,8 +480,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setLayoutText");
         }
 
-        [McpServerTool, Description(
-            "Export a layout to PDF (default), PNG, JPG, TIFF, or SVG. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Export capability. Export a layout to PDF (default), PNG, JPG, TIFF, or SVG. " +
             "Format is selected by the 'format' argument or by the output file's extension. " +
             "Raster formats default to 300 DPI; pass 'resolution' to override.")]
         public static async Task<string> ExportLayout(
@@ -532,8 +504,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── ModelBuilder Tools ──────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "List all toolboxes (.atbx) in the current ArcGIS Pro project. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List all toolboxes (.atbx) in the current ArcGIS Pro project. " +
             "Returns name and file path for each toolbox.")]
         public static async Task<string> ListToolboxes()
         {
@@ -541,8 +512,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listToolboxes");
         }
 
-        [McpServerTool, Description(
-            "List all tools (models and scripts) in a specific toolbox. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List all tools (models and scripts) in a specific toolbox. " +
             "Returns the name and type (Model/Script) of each tool.")]
         public static async Task<string> ListModels(
             [Description("Full file path to the .atbx toolbox file")] string toolboxPath)
@@ -551,8 +521,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listModels");
         }
 
-        [McpServerTool, Description(
-            "Get the full definition of a ModelBuilder model, including all input parameters, " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get the full definition of a ModelBuilder model, including all input parameters, " +
             "processing steps (geoprocessing tools), and data connections between them. " +
             "The definition uses a simplified JSON format where: " +
             "'inputs' lists model parameters with name/type/default — in the tool's real " +
@@ -575,8 +544,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.describeModel");
         }
 
-        [McpServerTool, Description(
-            "Create a new empty toolbox (.atbx) file. " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Create a new empty toolbox (.atbx) file. " +
             "If no path is specified, creates it in the project home folder. " +
             "Refuses to replace an existing toolbox (which would destroy its " +
             "models) unless overwrite=true is passed explicitly.")]
@@ -596,8 +564,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.createToolbox");
         }
 
-        [McpServerTool, Description(
-            "Create a new ModelBuilder model in a toolbox from a JSON definition. " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Create a new ModelBuilder model in a toolbox from a JSON definition. " +
             "The definition must include: " +
             "- 'name': string - the model name (no spaces, alphanumeric + underscores) " +
             "- 'description': string - what the model does " +
@@ -650,8 +617,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.createModel");
         }
 
-        [McpServerTool, Description(
-            "Update an existing model's definition. Replaces the model's workflow entirely " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Update an existing model's definition. Replaces the model's workflow entirely " +
             "with the new definition. Use DescribeModel first to get the current definition, " +
             "modify it, then pass the updated JSON here. The definition format is the same " +
             "as CreateModel. Preserve the 'optional'/'exposed' input flags and the top-level " +
@@ -672,8 +638,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.updateModel");
         }
 
-        [McpServerTool, Description(
-            "Surgically set (or clear) the default value of one model input parameter — " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Surgically set (or clear) the default value of one model input parameter — " +
             "without regenerating the rest of the model. Use this instead of UpdateModel when " +
             "you only need to change a parameter default. Everything else in the model " +
             "(other variables, every step, the diagram) stays byte-identical, so this cannot " +
@@ -695,8 +660,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setParameterDefault");
         }
 
-        [McpServerTool, Description(
-            "Surgically set one parameter on one step inside an existing model — without " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Surgically set one parameter on one step inside an existing model — without " +
             "regenerating the rest of the model. Use this to retarget a step input or change " +
             "a literal step value. Everything else stays byte-identical. " +
             "paramValue is a JSON string with one of two shapes: " +
@@ -722,8 +686,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setStepParameter");
         }
 
-        [McpServerTool, Description(
-            "Run a ModelBuilder model with specified parameter values. " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Run a ModelBuilder model with specified parameter values. " +
             "Use describe_model first to see what parameters the model expects. " +
             "Executes GP-tool steps, script-tool steps (dispatched by toolbox " +
             "path, including cross-toolbox references), and nested-model steps " +
@@ -742,7 +705,7 @@ namespace ArcGisMcpServer.Tools
             [Description("Optional: JSON object overriding ANY model variable by name " +
                 "(not just exposed parameters). Use to substitute dataset paths for " +
                 "bare map-layer names when running a model without its project open, " +
-                "e.g., {\"Farmland_CVWD\": \"C:\\\\data\\\\x.gdb\\\\Farmland\"}.")] string? variableOverrides = null,
+                "e.g., {\"ExampleFeatures\": \"C:\\\\data\\\\x.gdb\\\\Farmland\"}.")] string? variableOverrides = null,
             [Description("Optional: how to handle .pyt-hosted script-tool steps: " +
                 "'execute' (default — run them in a child arcpy process) or 'skip' " +
                 "(partial mode: skip them and everything downstream of them; " +
@@ -774,8 +737,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.runModel");
         }
 
-        [McpServerTool, Description(
-            "Start a ModelBuilder model run asynchronously and return a job id " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Start a ModelBuilder model run asynchronously and return a job id " +
             "immediately. Use this instead of run_model when the model may exceed " +
             "the agent's tool-call timeout (e.g., long-running models with hosted " +
             "service clips). Poll progress with get_run_status using the returned " +
@@ -813,8 +775,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.runModelAsync");
         }
 
-        [McpServerTool, Description(
-            "Get the current status of an async model run by job id (from " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get the current status of an async model run by job id (from " +
             "start_run_model). Returns a snapshot: status " +
             "(running/succeeded/failed), totalSteps, completedSteps, currentStep, " +
             "plus failedStep/failedTool/error on failure, totalMessages, and the " +
@@ -833,8 +794,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getRunStatus");
         }
 
-        [McpServerTool, Description(
-            "Run any geoprocessing tool directly (not just models). Useful for " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Automation capability. Run any geoprocessing tool directly (not just models). Useful for " +
             "one-off operations like Buffer, Clip, AddField, Statistics, etc. " +
             "Parameters are POSITIONAL in the tool's arcpy signature order — use " +
             "describe_gp_tool to get the exact order, and pass \"#\" in any " +
@@ -864,8 +824,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.runGPTool");
         }
 
-        [McpServerTool, Description(
-            "Add point features to an existing point layer in the active map. " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Add point features to an existing point layer in the active map. " +
             "The 'features' parameter is a JSON array of point definitions; each " +
             "point has x and y coordinates IN THE LAYER'S SPATIAL REFERENCE (no " +
             "automatic reprojection) and an optional attributes map for other " +
@@ -890,8 +849,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addPointFeatures");
         }
 
-        [McpServerTool, Description(
-            "Add polygon features to an existing polygon layer in the active map. " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Add polygon features to an existing polygon layer in the active map. " +
             "The 'features' parameter is a JSON array of polygon definitions; each " +
             "polygon has a 'vertices' array of [x, y] coordinate pairs IN THE " +
             "LAYER'S SPATIAL REFERENCE (no automatic reprojection) and an optional " +
@@ -919,8 +877,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── GP Tool Discovery ───────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Get the full parameter schema of any system geoprocessing tool by " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get the full parameter schema of any system geoprocessing tool by " +
             "'alias.ToolName' (e.g., 'analysis.Buffer', 'management.AddField'). " +
             "Returns each parameter IN POSITIONAL ORDER with name, data type, " +
             "in/out direction, optional flag, default value, allowed values " +
@@ -935,8 +892,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.describeGpTool");
         }
 
-        [McpServerTool, Description(
-            "Search ArcGIS Pro's ~1700 system geoprocessing tools by name keyword. " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Search ArcGIS Pro's ~1700 system geoprocessing tools by name keyword. " +
             "Returns matching 'alias.ToolName' ids ready for describe_gp_tool / " +
             "run_gp_tool. Example: keyword 'buffer' finds analysis.Buffer, " +
             "analysis.PairwiseBuffer, analysis.GraphicBuffer, etc.")]
@@ -955,8 +911,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Python Escape Hatch ─────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Execute arbitrary Python code INSIDE ArcGIS Pro's live Python " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Python capability. Execute arbitrary Python code INSIDE ArcGIS Pro's live Python " +
             "environment (arcpy pre-imported, full arcpy.mp / arcpy.da / CIM " +
             "access). Because it runs in-process, " +
             "arcpy.mp.ArcGISProject('CURRENT') manipulates the OPEN project — " +
@@ -981,15 +936,14 @@ namespace ArcGisMcpServer.Tools
 
         // ─── View / Camera / Bookmarks ───────────────────────────────────
 
-        [McpServerTool, Description(
-            "Capture the active map view to a PNG image — this is how you SEE the " +
-            "map (current extent, symbology, drawn layers). Returns the file path; " +
-            "read the image file to inspect it. Use after symbology/layout changes " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Export capability. Capture the active map view to a PNG image — this is how you SEE the " +
+            "map (current extent, symbology, drawn layers). Returns a PNG image content block and file path. " +
+            "Use after symbology/layout changes " +
             "to verify results visually, or before answering questions about what " +
             "the map shows. Requires a map tab to be active in Pro (for layouts " +
-            "use export_layout). Default 1200x900 px to project_home/mcp-captures/.")]
-        public static async Task<string> CaptureMapView(
-            [Description("Optional: output PNG path. Default: <project home>/mcp-captures/map_view_<timestamp>.png")] string? output = null,
+            "use export_layout). Default 1200x900 px to the configured OutputRoot.")]
+        public static async Task<ModelContextProtocol.Protocol.CallToolResult> CaptureMapView(
+            [Description("Optional: new PNG path under the configured OutputRoot. Default: a unique filename in OutputRoot.")] string? output = null,
             [Description("Optional: image width in pixels (default 1200, max 4096)")] int? width = null,
             [Description("Optional: image height in pixels (default 900, max 4096)")] int? height = null)
         {
@@ -998,11 +952,13 @@ namespace ArcGisMcpServer.Tools
             if (width.HasValue) args["width"] = width.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (height.HasValue) args["height"] = height.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var r = await _client!.OpAsync("pro.captureMapView", args);
-            return FormatResult(r, "pro.captureMapView");
+            var text = FormatResult(r, "pro.captureMapView");
+            var outputPath = r.Data?.GetProperty("output").GetString()
+                ?? throw new ModelContextProtocol.McpException("Capture did not return an output path.");
+            return await CaptureResult.CreateAsync(outputPath, text);
         }
 
-        [McpServerTool, Description(
-            "Zoom the active map view to an explicit bounding box. Coordinates " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Zoom the active map view to an explicit bounding box. Coordinates " +
             "are in the map's spatial reference unless 'wkid' says otherwise " +
             "(e.g., pass wkid=4326 for lon/lat degrees).")]
         public static async Task<string> ZoomToExtent(
@@ -1025,8 +981,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.zoomToExtent");
         }
 
-        [McpServerTool, Description(
-            "Set the active map view's scale denominator (e.g., 24000 shows the " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Set the active map view's scale denominator (e.g., 24000 shows the " +
             "map at 1:24,000). Keeps the current center point.")]
         public static async Task<string> ZoomToScale(
             [Description("Scale denominator, e.g. 24000 for 1:24,000")] double scale)
@@ -1038,8 +993,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.zoomToScale");
         }
 
-        [McpServerTool, Description(
-            "Zoom the active map view to the union of all currently selected " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Zoom the active map view to the union of all currently selected " +
             "features (any layer). No-op with a hint if nothing is selected.")]
         public static async Task<string> ZoomToSelected()
         {
@@ -1047,8 +1001,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.zoomToSelected");
         }
 
-        [McpServerTool, Description(
-            "List spatial bookmarks of a map (name + extent). Default: active map.")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List spatial bookmarks of a map (name + extent). Default: active map.")]
         public static async Task<string> ListBookmarks(
             [Description("Optional: map name. Default: active map.")] string? map = null)
         {
@@ -1058,7 +1011,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listBookmarks");
         }
 
-        [McpServerTool, Description("Zoom the active map view to a named bookmark.")]
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Zoom the active map view to a named bookmark.")]
         public static async Task<string> ZoomToBookmark(
             [Description("Bookmark name (see list_bookmarks)")] string name)
         {
@@ -1066,8 +1019,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.zoomToBookmark");
         }
 
-        [McpServerTool, Description(
-            "Create a bookmark of the active map view's current extent.")]
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Create a bookmark of the active map view's current extent.")]
         public static async Task<string> CreateBookmark(
             [Description("Name for the new bookmark")] string name)
         {
@@ -1077,8 +1029,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Editing ─────────────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Update attribute values on features/rows matching a WHERE clause or " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Update attribute values on features/rows matching a WHERE clause or " +
             "an explicit ObjectID list (exactly one of 'where'/'oids' required — " +
             "use where=\"1=1\" to deliberately target every row; capped at 10,000 " +
             "rows). 'attributes' is a JSON object {field: value, ...}. Edits go " +
@@ -1104,8 +1055,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.updateFeatures");
         }
 
-        [McpServerTool, Description(
-            "Delete features/rows matching a WHERE clause or an explicit ObjectID " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Delete features/rows matching a WHERE clause or an explicit ObjectID " +
             "list (exactly one of 'where'/'oids' required; capped at 10,000 rows). " +
             "Deletes go into Pro's undo-able edit session — call save_edits to " +
             "persist, or discard_edits to roll back.")]
@@ -1123,8 +1073,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.deleteFeatures");
         }
 
-        [McpServerTool, Description(
-            "Add polyline features to an existing polyline layer in the active " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Add polyline features to an existing polyline layer in the active " +
             "map. Same contract as add_point_features/add_polygon_features: each " +
             "feature has 'vertices' ([x,y] pairs, at least 2, IN THE LAYER'S " +
             "SPATIAL REFERENCE) and optional 'attributes'. Example: " +
@@ -1142,8 +1091,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addPolylineFeatures");
         }
 
-        [McpServerTool, Description(
-            "Save all pending edits in Pro's edit session to disk. Use after " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Save all pending edits in Pro's edit session to disk. Use after " +
             "update_features / delete_features / add_*_features when the changes " +
             "should be permanent.")]
         public static async Task<string> SaveEdits()
@@ -1152,8 +1100,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.saveEdits");
         }
 
-        [McpServerTool, Description(
-            "Discard ALL pending (unsaved) edits in Pro's edit session — rolls " +
+        [McpServerTool(ReadOnly = false, Destructive = true), Description("Requires Editing capability. Discard ALL pending (unsaved) edits in Pro's edit session — rolls " +
             "back every update/delete/add since the last save. Destructive to " +
             "pending work; check has_edits first if unsure.")]
         public static async Task<string> DiscardEdits()
@@ -1162,7 +1109,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.discardEdits");
         }
 
-        [McpServerTool, Description("Check whether Pro has unsaved edits in its edit session.")]
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Check whether Pro has unsaved edits in its edit session.")]
         public static async Task<string> HasEdits()
         {
             var r = await _client!.OpAsync("pro.hasEdits");
@@ -1171,8 +1118,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Map Administration ──────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Create a new map in the project (and open its view by default, " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Create a new map in the project (and open its view by default, " +
             "making it the active map). Uses the project's default basemap.")]
         public static async Task<string> CreateMap(
             [Description("Name for the new map")] string name,
@@ -1186,8 +1132,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.createMap");
         }
 
-        [McpServerTool, Description(
-            "Open (activate) a map view pane for a named map. Most mutation tools " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Open (activate) a map view pane for a named map. Most mutation tools " +
             "target the ACTIVE map — use this to switch which map that is.")]
         public static async Task<string> OpenMapView(
             [Description("Map name (see list_maps)")] string name)
@@ -1196,8 +1141,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.openMapView");
         }
 
-        [McpServerTool, Description(
-            "Set a map's basemap to a named Esri basemap (replaces current " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Set a map's basemap to a named Esri basemap (replaces current " +
             "basemap layers). The error message lists valid names if yours " +
             "doesn't match; common ones: Imagery, Streets, Topographic, " +
             "LightGray, DarkGray, Oceans, OpenStreetMap, Terrain, None.")]
@@ -1211,8 +1155,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setBasemap");
         }
 
-        [McpServerTool, Description(
-            "Set or clear a layer's definition query. Unlike a selection, a " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Set or clear a layer's definition query. Unlike a selection, a " +
             "definition query persistently filters what the layer displays AND " +
             "what geoprocessing sees, until cleared. Pass an empty/omitted " +
             "'where' to clear. Example: layer='Wetlands', where=\"ACRES > 0.5\".")]
@@ -1228,8 +1171,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setDefinitionQuery");
         }
 
-        [McpServerTool, Description(
-            "Set a layer's transparency: 0 = fully opaque, 100 = invisible. " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Set a layer's transparency: 0 = fully opaque, 100 = invisible. " +
             "Useful for overlay cartography (e.g., 40-60 for analysis results " +
             "over a basemap).")]
         public static async Task<string> SetLayerTransparency(
@@ -1247,8 +1189,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setLayerTransparency");
         }
 
-        [McpServerTool, Description(
-            "Turn feature labels on/off for a layer, optionally setting what they " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Turn feature labels on/off for a layer, optionally setting what they " +
             "show: pass 'field' for the simple case (labels display that field) " +
             "or 'expression' for full Arcade control (e.g., " +
             "'$feature.NAME + \\\" (\\\" + $feature.ACRES + \\\")\\\"').")]
@@ -1273,8 +1214,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Layout Furniture ────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Add a legend to a layout, bound to a map frame (auto-lists the " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a legend to a layout, bound to a map frame (auto-lists the " +
             "frame's visible layers). Position/size in inches from page TOP-LEFT. " +
             "Defaults: x=0.5, y=0.5, 2.5x3.5in.")]
         public static async Task<string> AddLegend(
@@ -1290,8 +1230,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addLegend");
         }
 
-        [McpServerTool, Description(
-            "Add a north arrow to a layout, bound to a map frame (rotates with " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a north arrow to a layout, bound to a map frame (rotates with " +
             "the frame). Position/size in inches from page TOP-LEFT. Defaults " +
             "suit letter-landscape top-right (x=10.2, y=0.4, 0.5x0.8in).")]
         public static async Task<string> AddNorthArrow(
@@ -1309,8 +1248,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addNorthArrow");
         }
 
-        [McpServerTool, Description(
-            "Add a scale bar to a layout, bound to a map frame (tracks the " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a scale bar to a layout, bound to a map frame (tracks the " +
             "frame's scale). Position/size in inches from page TOP-LEFT. Defaults " +
             "suit letter-landscape bottom-left (x=1, y=7.7, 3x0.5in).")]
         public static async Task<string> AddScaleBar(
@@ -1328,8 +1266,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addScaleBar");
         }
 
-        [McpServerTool, Description(
-            "Add a NEW free text element to a layout (title, subtitle, credits). " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Add a NEW free text element to a layout (title, subtitle, credits). " +
             "Position in inches from page TOP-LEFT (the text anchors at that " +
             "point). To change text of an EXISTING element use set_layout_text.")]
         public static async Task<string> AddLayoutText(
@@ -1356,8 +1293,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.addLayoutText");
         }
 
-        [McpServerTool, Description(
-            "Point a layout map frame's camera at a layer's extent OR an explicit " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Point a layout map frame's camera at a layer's extent OR an explicit " +
             "bounding box — how you control what area the printed map shows. " +
             "Provide 'layer' (zoom to that layer) or xmin/ymin/xmax/ymax.")]
         public static async Task<string> SetMapFrameExtent(
@@ -1385,8 +1321,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Symbology ───────────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Set a feature layer's renderer. rendererType options: " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires Cartography capability. Set a feature layer's renderer. rendererType options: " +
             "'simple' (one symbol — use fillR/fillG/fillB 0-255, optional " +
             "outline colors, size for points, lineWidth for lines); " +
             "'uniqueValues' (one color per distinct value of 'field'); " +
@@ -1427,8 +1362,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.setLayerRenderer");
         }
 
-        [McpServerTool, Description(
-            "Get a summary of a feature layer's current renderer (type, " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Get a summary of a feature layer's current renderer (type, " +
             "classification field, class count).")]
         public static async Task<string> GetLayerSymbology(
             [Description("Feature layer name, matching what list_layers returns")] string layer,
@@ -1442,8 +1376,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Analysis ────────────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "Scan one field of a layer/table and return its value profile: " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Scan one field of a layer/table and return its value profile: " +
             "total/null counts, distinct count, the most frequent values with " +
             "counts, and min/max/mean for numeric fields. Use BEFORE writing a " +
             "WHERE clause (see actual values, not guessed ones) or choosing a " +
@@ -1467,8 +1400,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.getFieldStatistics");
         }
 
-        [McpServerTool, Description(
-            "Select features in one layer based on their spatial relationship " +
+        [McpServerTool(ReadOnly = false, Destructive = false), Description("Requires View capability. Select features in one layer based on their spatial relationship " +
             "to another layer's features (intersect, within distance, contains, " +
             "etc.). Returns the resulting selected count. Combine with " +
             "select_by_attribute via selectionType (NEW_SELECTION, " +
@@ -1498,8 +1430,7 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Catalog / Data Discovery ────────────────────────────────────
 
-        [McpServerTool, Description(
-            "List the contents of a file geodatabase WITHOUT needing anything in " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. List the contents of a file geodatabase WITHOUT needing anything in " +
             "a map: feature classes (with geometry type + SR), tables, rasters, " +
             "and feature datasets. Defaults to the project's default GDB — where " +
             "run_model and run_gp_tool outputs land — so use this to verify " +
@@ -1513,8 +1444,7 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, "pro.listGdbContents");
         }
 
-        [McpServerTool, Description(
-            "Describe a dataset by full path (e.g. 'F:/proj/data.gdb/Wetlands') " +
+        [McpServerTool(ReadOnly = true, Destructive = false), Description("Requires Inspect capability. Describe a dataset by full path (e.g. 'C:/Example/data.gdb/Wetlands') " +
             "without adding it to a map: fields, geometry type, spatial " +
             "reference, extent, and row count. File-geodatabase paths only; for " +
             "shapefiles or rasters use execute_python with arcpy.Describe.")]
@@ -1527,12 +1457,11 @@ namespace ArcGisMcpServer.Tools
 
         // ─── Advanced ────────────────────────────────────────────────────
 
-        [McpServerTool, Description(
-            "ADVANCED escape hatch: send a raw bridge op with a JSON args object. " +
-            "Lets you reach Add-In ops that don't have a dedicated MCP tool yet " +
-            "(e.g., after the Add-In is updated but before this server is " +
-            "rebuilt). All arg values must be strings. Returns the raw bridge " +
-            "response. Unknown ops return 'op not found: <op>'.")]
+        [McpServerTool(ReadOnly = false, Destructive = true), Description(
+            "Send a registered bridge operation with JSON arguments. This uses the same " +
+            "capability policy and argument limits as dedicated tools; it cannot bypass " +
+            "disabled operations or enable unregistered operations. Potentially destructive " +
+            "when an enabled operation changes data. Prefer the dedicated tools.")]
         public static async Task<string> BridgeOp(
             [Description("Bridge op name, e.g. 'pro.getProjectInfo'")] string op,
             [Description("Optional: JSON object of string arguments, e.g. {\"layer\": \"Roads\"}")] string? argsJson = null)
@@ -1564,14 +1493,14 @@ namespace ArcGisMcpServer.Tools
             return FormatResult(r, op);
         }
 
-        [McpServerTool, Description(
+        [McpServerTool(ReadOnly = true, Destructive = false), Description(
             "List live ArcGIS Pro instances this MCP server can see (one bridge " +
             "per Pro process), without contacting any of them. Shows each " +
             "instance's PID, open project, pipe name, and which one THIS server " +
             "routes to ('selected'). Routing: if the ARCGIS_PROJECT env var is " +
             "set on this server, it is pinned strictly to the Pro instance with " +
             "that project open (requests fail rather than touch a different " +
-            "instance); otherwise the most-recently-started instance is used. " +
+            "instance); otherwise exactly one live instance is required. " +
             "Run this first when multiple Pro windows may be open, or to " +
             "diagnose 'pinned project not open' errors.")]
         public static string ListBridges()
@@ -1579,20 +1508,22 @@ namespace ArcGisMcpServer.Tools
             // Pure registry read — works even when no Pro instance is running,
             // which is exactly when an agent most needs to see what's going on.
             var entries = BridgeDiscovery.ReadAllLive();
-            var selected = BridgeDiscovery.SelectCurrent(entries);
+            BridgeDiscovery.BridgeEntry? selected = null;
+            string? routingError = null;
+            try { selected = BridgeDiscovery.SelectCurrent(entries); }
+            catch (InvalidOperationException ex) { routingError = ex.Message; }
             var envPin = BridgeDiscovery.PinnedProject;
             var pin = BridgeDiscovery.EffectivePin;
             var source = envPin != null ? "env" : (pin != null ? "agent" : "auto");
 
             var pinLabel = source == "env" ? "PINNED via ARCGIS_PROJECT" : "Routing set via select_bridge";
-            var note = pin == null
+            var note = routingError ?? (pin == null
                 ? (entries.Count > 1
-                    ? "Auto routing: this server follows the most-recently-started instance, which can " +
-                      "change if another Pro launches. Use select_bridge (or the ARCGIS_PROJECT env var) to pin."
-                    : "Auto routing (most-recently-started instance). Use select_bridge to target a specific instance.")
+                    ? "Multiple bridges require an exact project pin."
+                    : "Automatic routing is allowed only when exactly one bridge is live.")
                 : (selected == null
                     ? $"{pinLabel} to '{pin}' but that project is not open in any live instance — requests will fail until it is."
-                    : $"{pinLabel} to '{pin}': all requests route to pid {selected.Pid} only.");
+                    : $"{pinLabel} to '{pin}': all requests route to pid {selected.Pid} only."));
 
             var payload = new BridgeListPayload(
                 pin,
@@ -1607,14 +1538,14 @@ namespace ArcGisMcpServer.Tools
             return JsonSerializer.Serialize(payload, IndentedJsonContext.Default.BridgeListPayload);
         }
 
-        [McpServerTool, Description(
+        [McpServerTool(ReadOnly = false, Destructive = false), Description(
             "Route this server's subsequent tool calls to a specific ArcGIS Pro " +
             "instance, selected by the project it has open (run list_bridges " +
             "first to see live instances). Lets one agent work across multiple " +
             "Pro instances by switching between them: select_bridge('ProjectB'), " +
             "do work there, select_bridge('ProjectA') to switch back, or " +
             "select_bridge() with no argument to return to automatic " +
-            "most-recent routing. The selection is strict — while it is set, " +
+            "single-instance routing. The selection is strict — while it is set, " +
             "calls fail rather than touch a different instance — and persists " +
             "for this server process until changed. Refused when the server is " +
             "hard-pinned via the ARCGIS_PROJECT env var (that pin is the user's " +
@@ -1633,18 +1564,6 @@ namespace ArcGisMcpServer.Tools
                         "select_bridge cannot override an operator pin. To work across multiple Pro " +
                         "instances from one session, either run this server unpinned or configure one " +
                         "pinned server entry per instance in .mcp.json."),
-                    IndentedJsonContext.Default.FormatErrorPayload);
-
-            // RuntimeOverride is process-global (see BridgeDiscovery.HttpMode doc
-            // comment); on the shared HTTP transport, refuse unless the operator
-            // has explicitly accepted the cross-caller redirect risk.
-            if (BridgeDiscovery.HttpMode
-                && Environment.GetEnvironmentVariable("MCP_HTTP_ALLOW_SELECT_BRIDGE") != "true")
-                return JsonSerializer.Serialize(
-                    new FormatErrorPayload(false, "select_bridge",
-                        "select_bridge is disabled on the shared HTTP transport because the override " +
-                        "is process-global and would redirect ALL callers; pin per-user via " +
-                        "ARCGIS_PROJECT, or set MCP_HTTP_ALLOW_SELECT_BRIDGE=true to accept the risk."),
                     IndentedJsonContext.Default.FormatErrorPayload);
 
             BridgeDiscovery.RuntimeOverride = project;
@@ -1676,10 +1595,7 @@ namespace ArcGisMcpServer.Tools
         /// </summary>
         private static string FormatResult(IpcResponse r, string op)
         {
-            if (!r.Ok)
-                return JsonSerializer.Serialize(
-                    new FormatErrorPayload(false, op, r.Error ?? "<empty>"),
-                    IndentedJsonContext.Default.FormatErrorPayload);
+            if (!r.Ok) throw new ModelContextProtocol.McpException($"{op}: {r.Error ?? "Unknown bridge error"}");
 
             // r.Ok=true: bridge returned successfully. Data is normally a real
             // JsonElement; null only occurs for side-effect-only ops that don't

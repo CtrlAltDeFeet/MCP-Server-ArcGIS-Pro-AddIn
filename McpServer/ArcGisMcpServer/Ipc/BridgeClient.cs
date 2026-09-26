@@ -1,182 +1,47 @@
+using ArcGisBridge;
+using Microsoft.Win32.SafeHandles;
+using System.Diagnostics;
 using System.IO.Pipes;
-using System.Text;
-using System.Text.Json;
-
-namespace ArcGisMcpServer.Ipc
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+namespace ArcGisMcpServer.Ipc;
+public sealed class BridgeClient
 {
-    /// <summary>
-    /// Options for <see cref="BridgeClient"/>. All timeouts are in milliseconds.
-    /// Defaults can be overridden via the constructor or via environment
-    /// variables (see <see cref="FromEnvironment"/>).
-    /// </summary>
-    public sealed class BridgeClientOptions
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
+    public async Task<IpcResponse> SendAsync(IpcRequest request, CancellationToken ct = default)
     {
-        public int MaxRetries { get; init; } = 3;
-        public int ConnectTimeoutMs { get; init; } = 5000;
-        // 600s default covers long-running operations like run_model on a
-        // realistic ModelBuilder chain (Aurora's 31-step model with hosted
-        // service clips takes minutes). Shorter ops (most read-side handlers)
-        // complete in seconds, so the long ceiling is not paid in practice;
-        // it only kicks in for genuinely long ones. Cutting off mid-operation
-        // makes successful work look like a failure and the bridge keeps
-        // running server-side after the MCP gave up, wasting GP resources.
-        public int RequestTimeoutMs { get; init; } = 600000;
-        public int InitialBackoffMs { get; init; } = 250;
-        public int MaxBackoffMs { get; init; } = 4000;
-
-        /// <summary>
-        /// Reads optional overrides from environment variables. Missing or
-        /// unparseable values fall back to the built-in defaults.
-        /// Variables: ARCGIS_MCP_MAX_RETRIES, ARCGIS_MCP_CONNECT_TIMEOUT_MS,
-        /// ARCGIS_MCP_REQUEST_TIMEOUT_MS, ARCGIS_MCP_INITIAL_BACKOFF_MS,
-        /// ARCGIS_MCP_MAX_BACKOFF_MS.
-        /// </summary>
-        public static BridgeClientOptions FromEnvironment() => new()
+        bool transmissionStarted = false;
+        try
         {
-            MaxRetries        = EnvInt("ARCGIS_MCP_MAX_RETRIES",        3),
-            ConnectTimeoutMs  = EnvInt("ARCGIS_MCP_CONNECT_TIMEOUT_MS", 5000),
-            RequestTimeoutMs  = EnvInt("ARCGIS_MCP_REQUEST_TIMEOUT_MS", 600000),
-            InitialBackoffMs  = EnvInt("ARCGIS_MCP_INITIAL_BACKOFF_MS", 250),
-            MaxBackoffMs      = EnvInt("ARCGIS_MCP_MAX_BACKOFF_MS",     4000),
-        };
-
-        private static int EnvInt(string name, int fallback)
+            BridgePolicy.Load().Authorize(request.Op, request.Args);
+            var entry = BridgeDiscovery.Resolve();
+            request = request with { ProjectPath = entry.ProjectPath };
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(BridgeProtocol.OperationTimeout + TimeSpan.FromSeconds(10));
+            using var client = new NamedPipeClientStream(".", entry.PipeName, PipeDirection.InOut,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, TokenImpersonationLevel.Anonymous);
+            await client.ConnectAsync(3000, deadline.Token);
+            VerifyServer(client, entry.Pid);
+            transmissionStarted = true;
+            return await BridgeProtocol.ExchangeOnceAsync<IpcRequest,IpcResponse>(client, request, deadline.Token);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            var raw = Environment.GetEnvironmentVariable(name);
-            return int.TryParse(raw, out var v) && v >= 0 ? v : fallback;
+            return new(false, transmissionStarted
+                ? $"Outcome uncertain: {ex.Message}. The operation may have completed or may still be running. Inspect the project before retrying; this server never automatically replays requests."
+                : ex.Message, null);
         }
     }
-
-    public class BridgeClient
+    public static void VerifyServer(NamedPipeClientStream client, int expectedPid)
     {
-        // Resolver is called on every connection attempt so that when Pro restarts
-        // (new PID ⇒ new pipe name), subsequent requests pick up the fresh pipe
-        // without needing to restart the MCP server. Typical overhead per call is
-        // one small JSON read from %LOCALAPPDATA%\ArcGisMcpBridge\ via BridgeDiscovery.
-        private readonly Func<string> _pipeNameResolver;
-        private readonly BridgeClientOptions _options;
-
-        public BridgeClient(string pipeName)
-            : this(() => pipeName, BridgeClientOptions.FromEnvironment()) { }
-
-        public BridgeClient(string pipeName, BridgeClientOptions options)
-            : this(() => pipeName, options) { }
-
-        public BridgeClient(Func<string> pipeNameResolver)
-            : this(pipeNameResolver, BridgeClientOptions.FromEnvironment()) { }
-
-        public BridgeClient(Func<string> pipeNameResolver, BridgeClientOptions options)
-        {
-            _pipeNameResolver = pipeNameResolver;
-            _options = options;
-        }
-
-        public async Task<IpcResponse> SendAsync(IpcRequest req,
-            CancellationToken ct = default)
-        {
-            Exception? lastEx = null;
-
-            // attempts = 1 initial try + MaxRetries retries.
-            int attempts = Math.Max(1, _options.MaxRetries + 1);
-            for (int attempt = 0; attempt < attempts; attempt++)
-            {
-                if (attempt > 0)
-                    await Task.Delay(BackoffForAttempt(attempt), ct);
-
-                // Per-request timeout covers connect + write + read. A hung
-                // ArcGIS Pro handler would otherwise block the MCP caller
-                // indefinitely, which breaks Copilot Agent Mode UX.
-                using var timeoutCts = new CancellationTokenSource(_options.RequestTimeoutMs);
-                using var linkedCts = CancellationTokenSource
-                    .CreateLinkedTokenSource(ct, timeoutCts.Token);
-
-                try
-                {
-                    return await SendOnceAsync(req, linkedCts.Token);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    // Caller cancelled — don't retry, propagate.
-                    throw;
-                }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-                {
-                    // A genuine handler timeout won't be resolved by retrying — the
-                    // bridge isn't responding within the allotted time, and N more
-                    // attempts of the same duration just stalls the agent for minutes.
-                    // Return a structured response so FormatResult surfaces it to the
-                    // agent immediately instead of the generic MCP error wrapper.
-                    return new IpcResponse(false,
-                        $"timeout: bridge op '{req.Op}' exceeded {_options.RequestTimeoutMs}ms; " +
-                        "the handler started but didn't respond. Check mcp-bridge.log for progress.",
-                        null);
-                }
-                catch (Exception ex)
-                {
-                    // Transient errors (pipe not yet created after Pro restart,
-                    // broken pipe mid-request, connection refused) — retry with
-                    // backoff. G7's per-request pipe rediscovery means retries
-                    // automatically follow Pro across restarts.
-                    lastEx = ex;
-                }
-            }
-
-            // Structured response instead of a thrown IOException: the MCP SDK
-            // swallows exception messages (the agent would see only a generic
-            // "an error occurred"), while a returned IpcResponse flows through
-            // FormatResult and reaches the agent with actionable next steps.
-            if (lastEx is BridgePinException)
-                return new IpcResponse(false,
-                    $"{lastEx.Message} Pinned routing is strict so this server never falls " +
-                    "back to a different Pro instance. If the project is still loading, retry " +
-                    "in ~30s. Otherwise open that project in an ArcGIS Pro instance, route to " +
-                    "another live instance with select_bridge (unless pinned via the " +
-                    "ARCGIS_PROJECT env var, which only the user can change), or use " +
-                    "list_bridges to see what's live.",
-                    null);
-            return new IpcResponse(false,
-                $"bridge unreachable for op '{req.Op}' after {attempts} attempt(s): {lastEx?.Message}. " +
-                "This usually means ArcGIS Pro is not running, or the APBridge Add-In isn't loaded. " +
-                "Ask the user to start ArcGIS Pro (the bridge registers itself a few seconds after " +
-                "the project loads), then retry. Pro restarts are picked up automatically.",
-                null);
-        }
-
-        private async Task<IpcResponse> SendOnceAsync(IpcRequest req, CancellationToken ct)
-        {
-            var pipeName = _pipeNameResolver();
-            // CurrentUserOnly pairs with the server's flag: verifies the pipe is
-            // owned by the same user, preventing a planted look-alike pipe from
-            // intercepting bridge traffic.
-            using var client = new NamedPipeClientStream(".", pipeName,
-                PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-            await client.ConnectAsync(_options.ConnectTimeoutMs, ct);
-
-            using var reader = new StreamReader(client, Encoding.UTF8, leaveOpen: true);
-            using var writer = new StreamWriter(client, new UTF8Encoding(false), leaveOpen: true)
-                { AutoFlush = true };
-
-            await writer.WriteLineAsync(
-                JsonSerializer.Serialize(req, McpJsonContext.Default.IpcRequest).AsMemory(), ct);
-
-            var line = await reader.ReadLineAsync(ct);
-            if (line is null) throw new IOException("bridge closed without response");
-
-            return JsonSerializer.Deserialize(line, McpJsonContext.Default.IpcResponse)
-                ?? new IpcResponse(false, "deserialize returned null", null);
-        }
-
-        /// <summary>Exponential backoff, capped at <see cref="BridgeClientOptions.MaxBackoffMs"/>.</summary>
-        private int BackoffForAttempt(int attempt)
-        {
-            // attempt is 1-based here (first retry = 1). Delay = initial * 2^(attempt-1).
-            long delay = (long)_options.InitialBackoffMs << (attempt - 1);
-            if (delay > _options.MaxBackoffMs) delay = _options.MaxBackoffMs;
-            return (int)delay;
-        }
-
-        public Task<IpcResponse> OpAsync(string op,
-            Dictionary<string, string>? args = null, CancellationToken ct = default)
-            => SendAsync(new IpcRequest(op, args), ct);
+        if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out uint pid) || pid != expectedPid)
+            throw new IOException("The bridge server process does not match discovery.");
+        using var process = Process.GetProcessById(checked((int)pid));
+        var expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ArcGIS", "Pro", "bin", "ArcGISPro.exe");
+        if (!string.Equals(process.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The pipe is not owned by the installed ArcGIS Pro executable.");
     }
+    public Task<IpcResponse> OpAsync(string op, Dictionary<string, string>? args = null, CancellationToken ct = default) => SendAsync(new(op, args), ct);
 }

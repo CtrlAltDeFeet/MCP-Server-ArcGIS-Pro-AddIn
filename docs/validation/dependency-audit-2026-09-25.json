@@ -1,0 +1,168 @@
+{
+  "checkedUtc": "2026-09-25T22:08:38.037613+00:00",
+  "source": "https://api.nuget.org/v3/vulnerabilities/index.json",
+  "packages": [
+    {
+      "name": "microsoft.extensions.ai.abstractions",
+      "version": "10.8.3",
+      "contentHash": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig=="
+    },
+    {
+      "name": "microsoft.extensions.caching.abstractions",
+      "version": "10.0.10",
+      "contentHash": "4ZFBNE+jzR+CrWWlhOesnmywCW7pYKT0dxyAQRdL11yJwxe4jvcAu31eorFtEkoFeCDcUTeNssgPv2yaRRptaQ=="
+    },
+    {
+      "name": "microsoft.extensions.configuration",
+      "version": "10.0.8",
+      "contentHash": "ehZcoPbjzWzS4XFvuz7R3V55SmpdkyMqFURLH3yXaN9NtXd9tR6CGB7pd49HYtCkenl+G7ctXSFLhNI08xLfRg=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.abstractions",
+      "version": "10.0.10",
+      "contentHash": "5Vnd2I75DmZCVEjSynIdJ/0EGafgnLQwgR3t2C2/fkjx/nRG+cLwxLLdInoHeCEpkD5K4Ov/g9ZCRYrl4TRsaA=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.binder",
+      "version": "10.0.8",
+      "contentHash": "R3NN1X+kVu14uoxLEW6sBSQyhogDSbaOQzILnCtuXxBN4hx22AgjWPwZX6v/suERFkEDgU1lk12AglHTrUxhlw=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.commandline",
+      "version": "10.0.8",
+      "contentHash": "nQXq1a4MiInYh+0VF9fguxAl06q2ftmOyYQ+5e933s4rk57xjgkbTjUdFUySzjrcrvDeWsSqlZB+TE8+TbM2HA=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.environmentvariables",
+      "version": "10.0.8",
+      "contentHash": "bVGqctAfPGfTxJvNp8pMshtvpsUj6r6JkeiCNVIGVYO5gBxuxdN0Lbr25kEvE/zXdctkEc44g8HssnPgDnFGVA=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.fileextensions",
+      "version": "10.0.8",
+      "contentHash": "1g9mzuu8gIHkjYb0jLxOTQVl/QDG5nn0b0JzgT/gbgNKr6gXZzxOHRAsdYRc1eDApB7LdHR8uK5vQrNjIQdRrQ=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.json",
+      "version": "10.0.8",
+      "contentHash": "KLtAZ6A38s1pIfCO2ns6aG14NNGMYNZ4PBYfFK4M+R4A+xuSc6oklhqDcpHZxvDpyBWeFtR5C8iQBw2ng8tUHQ=="
+    },
+    {
+      "name": "microsoft.extensions.configuration.usersecrets",
+      "version": "10.0.8",
+      "contentHash": "6XTfFOnf27WY8kEeZkTZ4YNn0t+imgvdQ0YaAdR4vgURKATo9bCaVJ1KB71IOJAQtJP7Elb53VHlTNXg2CtSsA=="
+    },
+    {
+      "name": "microsoft.extensions.dependencyinjection",
+      "version": "10.0.8",
+      "contentHash": "daf62xHIrq8pnE709hgaZZN9tSam9TGGepWe1+bE6V3GEuVwJiMs6ib+38lfMCyAJAHiX0vapxBhsuMSV7U+cg=="
+    },
+    {
+      "name": "microsoft.extensions.dependencyinjection.abstractions",
+      "version": "10.0.10",
+      "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
+    },
+    {
+      "name": "microsoft.extensions.diagnostics",
+      "version": "10.0.8",
+      "contentHash": "uduyw9d3Fi+sbredO5drA1S44AQS2FRNFyn72UmB2vmQIO1qaXprpp1U/2lYhYi8yFdVERfY9sy/pxw/qPOU9w=="
+    },
+    {
+      "name": "microsoft.extensions.diagnostics.abstractions",
+      "version": "10.0.10",
+      "contentHash": "9uWiKpeOVac355STyChWR/pliFX/5CeLqChW9kKsaxyDH4EUTZxMkT4Jwp/J/peLm0GBFmSX5c0WCse3yCnq1Q=="
+    },
+    {
+      "name": "microsoft.extensions.fileproviders.abstractions",
+      "version": "10.0.10",
+      "contentHash": "c5zqFCY9DiIpMovLd7/d/CTiEtrMOuQ639dhv3PABtKQIKNQikSHwQt8+N679uii9q+B55lgK28Uv64FOwEu8w=="
+    },
+    {
+      "name": "microsoft.extensions.fileproviders.physical",
+      "version": "10.0.8",
+      "contentHash": "GkPvQe6IdidLu6Q3Lw6+B8NJpW8feW8czZ5mBKt5rXM/x8MvZfEp5WvAsjznzDGd23chIDrW0b2mmt+ScnEgiw=="
+    },
+    {
+      "name": "microsoft.extensions.filesystemglobbing",
+      "version": "10.0.8",
+      "contentHash": "IUQet3SY51xIFcFZKtAB6a54/Zdxs7T3SQ84kJtOD6yeXfZgiOMksACWD5qtTmXGQGFH4QYGBOT0KIO8Uy/dJw=="
+    },
+    {
+      "name": "microsoft.extensions.hosting",
+      "version": "10.0.8",
+      "contentHash": "VfEyM2BipThcSd0GG/FS2ZPCVCTiosVq2zLKEDsfeMIg78sOVZPEmS7CgWlb+dqTlgXvLSL4OG2q6sM4xRhHNg=="
+    },
+    {
+      "name": "microsoft.extensions.hosting.abstractions",
+      "version": "10.0.10",
+      "contentHash": "5LugpYGHk+mkn0a8IZgcyfBca8PCTAU9RQFoMrTdtOOidq88M2SI5f3px6ugnzgxC+eTkvYYJi8pzlUnG5xdAQ=="
+    },
+    {
+      "name": "microsoft.extensions.logging",
+      "version": "10.0.8",
+      "contentHash": "K60JhWC2hN/Gi7TP68tBxSzk5ACWOs7lkmPzsfA8Bcf/IXTajujt2ORMf9rSMk1bsng6Lv4Y3fuxp3bm1+15ug=="
+    },
+    {
+      "name": "microsoft.extensions.logging.abstractions",
+      "version": "10.0.10",
+      "contentHash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og=="
+    },
+    {
+      "name": "microsoft.extensions.logging.configuration",
+      "version": "10.0.8",
+      "contentHash": "rxSLTO7xTbcC3DuEJHNEijBr8g14Jj62zQ+DeFu68bsoTYoU8jLcMhc1735PV21bESXsATlL5LsfaWH71FOWAg=="
+    },
+    {
+      "name": "microsoft.extensions.logging.console",
+      "version": "10.0.8",
+      "contentHash": "6cv53sHsPnFS56PJw8X4GbNcjeX1KGyFJRxJWvxOgK63cnqeSB1k1eRwjUdkse0tBhwlH6qc9EOYDlan+CYTuw=="
+    },
+    {
+      "name": "microsoft.extensions.logging.debug",
+      "version": "10.0.8",
+      "contentHash": "4HW3M1lGHHDwEYcDZHRNptBQ48LCI2yW+XV4vuxdfQUqafTpVT8j9RqAsez08krZKhIiaArWu8iQq5uRKZ9Ffg=="
+    },
+    {
+      "name": "microsoft.extensions.logging.eventlog",
+      "version": "10.0.8",
+      "contentHash": "kK/C3SLIoGrcZvddYQw4eMm6YaROiSYBO7YgUR5Hdv5l+GIjBmbvQK5cST2FqjeubiAOPqFEimBT2N/8wVI+3A=="
+    },
+    {
+      "name": "microsoft.extensions.logging.eventsource",
+      "version": "10.0.8",
+      "contentHash": "HX2M0MgzwQM8jpLe3AYAEMd0YsUfOP5RgGrDuk+Ki9n7HSuMbvLm9TEV3qRI3Pg9aqxc56GfgK/KdMRBhfWwKw=="
+    },
+    {
+      "name": "microsoft.extensions.options",
+      "version": "10.0.10",
+      "contentHash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA=="
+    },
+    {
+      "name": "microsoft.extensions.options.configurationextensions",
+      "version": "10.0.8",
+      "contentHash": "VOapXeO3lhBH0zYoyAH7tjapuo4V5pTHlevPpiSHueEquAajqd5nF0mttm+h/uE/exwAEuM5s26SzOJtletE3w=="
+    },
+    {
+      "name": "microsoft.extensions.primitives",
+      "version": "10.0.10",
+      "contentHash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ=="
+    },
+    {
+      "name": "modelcontextprotocol",
+      "version": "2.2.0",
+      "contentHash": "4Pb9u02Nwsp0poueDsqNdyGRojFxOYpljB7zDBsq+aHL+Afou3OgxlBc3GWFVnsRMRJrUtWqDh3s6k2JgPzmrQ=="
+    },
+    {
+      "name": "modelcontextprotocol.core",
+      "version": "2.2.0",
+      "contentHash": "FeBfXU6T8k+jw4afg4sfxdEX2rL/e5oKOk9ROOGztu9k47+7Bz08sdaToYt2XvMY1opNbwxYQOFMj6wH9TInhA=="
+    },
+    {
+      "name": "system.diagnostics.eventlog",
+      "version": "10.0.8",
+      "contentHash": "+Ro7WgIom+BDNH+YhTuZKL6QJ0ctfOpTyfUG/h3aU5KwXt3OaNf0wYWrTvoBUj+34Dy5V8dN9yCco1hAJQ4txw=="
+    }
+  ],
+  "findings": [],
+  "limitations": "NuGet known-vulnerability feed only; not a full source audit."
+}

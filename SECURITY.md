@@ -1,0 +1,19 @@
+# Security properties and limits
+
+The server uses local stdio only. Both named-pipe ends require the current Windows user. The add-in reserves the first pipe instance; the client checks the connected server's PID and installed ArcGISPro.exe path and uses anonymous impersonation level. The bridge starts only from its ribbon button. Registry metadata is discovery, not authentication.
+
+Requests are length-prefixed JSON, limited to 1 MiB; responses are limited to 4 MiB with bounded serialization. Read/write idle deadlines are five seconds. The bridge has one listener and a shared operation semaphore across ribbon restarts. The ten-minute operation deadline is cooperative: ArcGIS native work may outlive cancellation. Such work is awaited and retains its lane rather than accumulating more queued work. One background model job is permitted; completed job history is bounded. Stopping the bridge does not undo completed changes or forcibly kill native work.
+
+The client never automatically retries requests. A broken connection after transmission is an uncertain outcome and may represent successful work. Inspect before retrying. Exact full-path project pins distinguish projects with identical filenames. Ambiguous pins and layer/table names fail. Project identity is rechecked at dispatch and inside queued GIS callbacks. Avoid manually switching projects or editing the same project during an AI operation; this is not a transaction lock over all Pro UI activity.
+
+Policy and discovery use the shared user-profile directory `.arcgis-mcp-extended`, avoiding Windows AppData virtualization by packaged hosts. Policy is enforced at the bridge and client. No MCP tool changes it. The bridge snapshots policy at start, so edits require stop/start. Default capabilities permit inspection, view/selection changes, cartography, saving the current project, and bounded-destination exports. Editing, arbitrary GP/model automation, and Python are disabled by default.
+
+Automation is deliberately full-trust: GP script tools and model steps can execute arbitrary code, access datasets outside OutputRoot, and overwrite data. Python is also unrestricted. They must be enabled only for trusted tasks and copied test data. Dedicated Editing limits explicit OID lists and WHERE expansion to 10,000 rows per update/delete; this is not a limit on arbitrary Automation/Python. SQL queries use existing ArcGIS data connections and may still be expensive.
+
+Export checks enforce OutputRoot containment and reject existing destinations, alternate streams, UNC/device paths, and existing reparse-point ancestors. These path checks are not a defense against a malicious process already controlling the same Windows account and racing filesystem changes. Same-user processes can also read/change policy or connect to the bridge; there is no per-client authentication or isolation between applications running as that user. Run both client and Pro unelevated.
+
+Data returned to an AI client, including attributes, service paths, map images, and error text, can enter that client's model context. Remote GIS layers may use Pro's existing connections. The bridge has no LLM credentials and does not select an AI provider.
+
+Source provenance, dependency hashes/signatures, vulnerability-feed checks, and tests improve confidence but do not prove absence of defects. Live acceptance and its limits are recorded in VALIDATION.md. Validate production datasets and licensed extensions separately; the published checks use synthetic fixtures.
+
+For a suspected vulnerability, contact the maintainer of the GitHub fork you obtained this build from through that repository's private reporting channel, if available. Do not publish credentials, private datasets, or exploit details in a public issue. This local package does not claim an upstream security-support commitment.

@@ -29,7 +29,7 @@ namespace APBridgeAddIn
             bool open = !args.TryGetValue("open", out string? openStr)
                         || !bool.TryParse(openStr, out var ob) || ob; // default true
 
-            var map = await QueuedTask.Run(() =>
+            var map = await CheckedRun(() =>
                 MapFactory.Instance.CreateMap(name, MapType.Map, MapViewingMode.Map, Basemap.ProjectDefault));
 
             if (map == null)
@@ -67,7 +67,7 @@ namespace APBridgeAddIn
             ArcGIS.Desktop.Mapping.Map map;
             try
             {
-                map = await QueuedTask.Run(() => ResolveMap(name));
+                map = await CheckedRun(() => ResolveMap(name));
             }
             catch (InvalidOperationException ex)
             {
@@ -107,7 +107,7 @@ namespace APBridgeAddIn
                 return new(false,
                     $"Unknown basemap '{basemapName}'. Valid values: {string.Join(", ", Enum.GetNames(typeof(Basemap)))}", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 map.SetBasemapLayers(basemap);
@@ -129,7 +129,7 @@ namespace APBridgeAddIn
             args.TryGetValue("where", out string? where);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);
@@ -169,11 +169,11 @@ namespace APBridgeAddIn
 
             transparency = Math.Max(0, Math.Min(100, transparency));
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 var layer = map.GetLayersAsFlattenedList()
-                    .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                    .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                 if (layer == null)
                     return new(false,
                         $"Layer not found: {layerName}. Available: " +
@@ -200,7 +200,7 @@ namespace APBridgeAddIn
             args.TryGetValue("expression", out string? expression);
             args.TryGetValue("map", out string? mapName);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var map = ResolveMap(mapName);
                 var member = RequireMapMember(map, layerName);

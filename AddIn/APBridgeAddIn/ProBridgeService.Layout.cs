@@ -26,7 +26,7 @@ namespace APBridgeAddIn
         private static (Layout? layout, string? error) GetLayoutByName(string name)
         {
             var item = Project.Current?.GetItems<LayoutProjectItem>()
-                .FirstOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                .SingleOrDefault(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (item == null)
             {
                 var available = Project.Current?.GetItems<LayoutProjectItem>()
@@ -45,7 +45,7 @@ namespace APBridgeAddIn
                 return (null, "Layout has no map frame — add one with add_map_frame_to_layout first.");
             if (string.IsNullOrWhiteSpace(frameName))
                 return (frames[0], null);
-            var frame = frames.FirstOrDefault(f => f.Name.Equals(frameName, StringComparison.OrdinalIgnoreCase));
+            var frame = frames.SingleOrDefault(f => f.Name.Equals(frameName, StringComparison.OrdinalIgnoreCase));
             return frame != null
                 ? (frame, null)
                 : (null, $"Map frame not found: {frameName}. Available: {string.Join(", ", frames.Select(f => f.Name))}");
@@ -77,7 +77,7 @@ namespace APBridgeAddIn
             double x = ArgDouble(args, "xInches", 0.5), y = ArgDouble(args, "yInches", 0.5);
             double w = ArgDouble(args, "widthInches", 2.5), h = ArgDouble(args, "heightInches", 3.5);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var (layout, err) = GetLayoutByName(layoutName);
                 if (layout == null) return new(false, err, null);
@@ -113,7 +113,7 @@ namespace APBridgeAddIn
             double x = ArgDouble(args, "xInches", 10.2), y = ArgDouble(args, "yInches", 0.4);
             double w = ArgDouble(args, "widthInches", 0.5), h = ArgDouble(args, "heightInches", 0.8);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var (layout, err) = GetLayoutByName(layoutName);
                 if (layout == null) return new(false, err, null);
@@ -159,7 +159,7 @@ namespace APBridgeAddIn
             double x = ArgDouble(args, "xInches", 1.0), y = ArgDouble(args, "yInches", 7.7);
             double w = ArgDouble(args, "widthInches", 3.0), h = ArgDouble(args, "heightInches", 0.5);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var (layout, err) = GetLayoutByName(layoutName);
                 if (layout == null) return new(false, err, null);
@@ -211,7 +211,7 @@ namespace APBridgeAddIn
             args.TryGetValue("font", out string? font);
             if (string.IsNullOrWhiteSpace(font)) font = "Arial";
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var (layout, err) = GetLayoutByName(layoutName);
                 if (layout == null) return new(false, err, null);
@@ -255,7 +255,7 @@ namespace APBridgeAddIn
             if (string.IsNullOrWhiteSpace(layerName) && !hasEnv)
                 return new(false, "Provide 'layer' (zoom frame to that layer) or xmin/ymin/xmax/ymax", null);
 
-            return await QueuedTask.Run<IpcResponse>(() =>
+            return await CheckedRun<IpcResponse>(() =>
             {
                 var (layout, err) = GetLayoutByName(layoutName);
                 if (layout == null) return new(false, err, null);
@@ -267,7 +267,7 @@ namespace APBridgeAddIn
                     var map = frame.Map;
                     if (map == null) return new(false, "Map frame has no map bound", null);
                     var layer = map.GetLayersAsFlattenedList()
-                        .FirstOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
+                        .SingleOrDefault(l => l.Name.Equals(layerName, StringComparison.OrdinalIgnoreCase));
                     if (layer == null)
                         return new(false,
                             $"Layer not found in frame's map: {layerName}. Available: " +
